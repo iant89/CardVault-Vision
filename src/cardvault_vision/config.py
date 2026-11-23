@@ -139,9 +139,10 @@ class Config:
         merged: dict = copy.deepcopy(dict(defaults or {}))
         used: list[str] = []
         for path in paths:
-            data = load_yaml(path)
+            resolved = _resolve_or_path(path)
+            data = load_yaml(resolved)
             merged = deep_merge(merged, data)
-            used.append(str(path))
+            used.append(str(resolved))
         if overrides:
             merged = deep_merge(merged, overrides)
         for item in sets or []:
@@ -205,6 +206,23 @@ class _Missing:
 
 
 _MISSING = _Missing()
+
+
+def _resolve_or_path(path: str | os.PathLike) -> Path:
+    """Accept a real path or a bare config name such as ``train-ocr``.
+
+    ``--config train-ocr`` is the documented form, so resolving names here keeps
+    the CLI honest instead of only accepting full paths.
+    """
+    candidate = Path(path)
+    if candidate.exists():
+        return candidate
+    if candidate.suffix in {".yaml", ".yml"} or os.sep not in str(path):
+        try:
+            return resolve_config_path(str(path))
+        except ConfigError:
+            pass
+    return candidate
 
 
 def resolve_config_path(name: str, *, search: tuple[Path, ...] = ()) -> Path:

@@ -1,0 +1,35 @@
+# Card-type classifier training
+#
+# The classifier runs *after* preprocessing and layout resolution, and picks the
+# game-specific model. It is intentionally a whole-card model rather than sharing
+# a backbone with the OCR heads: the roadmap only allows a multi-task backbone
+# once a benchmark shows it wins, and that benchmark lives in Phase 9.
+
+training:
+  task: card-classifier
+  architecture: card-type-cnn
+
+  epochs: 25
+  batch_size: 32
+
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  optimizer: adamw
+  scheduler: cosine
+  warmup_epochs: 0.5
+  grad_clip: 5.0
+
+  mixed_precision: false
+  device: auto
+  workers: 0
+  threads: null
+
+  # Card-type datasets are naturally imbalanced (Pokemon dominates), so the loss
+  # is class-weighted. Without it the model simply learns the majority answer.
+  class_weighting: balanced
+  label_smoothing: 0.05
+  patience: 5
+
+  input_size: 160
+  seed: 0
+  augment: true

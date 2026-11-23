@@ -169,12 +169,50 @@ def cmd_train(args: argparse.Namespace) -> int:
     return emit(args, payload, result.summary())
 
 
+#: Keys that may appear either at the top level or under the ``training:``
+#: section of a config file. Flattening both keeps ``--set epochs=40`` and
+#: ``training: {epochs: 40}`` interchangeable, which is what users expect.
+_FLAT_KEYS = (
+    "epochs", "batch_size", "learning_rate", "weight_decay", "optimizer",
+    "scheduler", "warmup_epochs", "grad_clip", "accumulation_steps",
+    "mixed_precision", "device", "workers", "threads", "patience",
+    "label_smoothing", "class_weighting", "input_height", "input_size",
+    "max_width", "seed", "augment", "architecture", "limit_steps",
+    "class_names", "dropout", "model_kwargs", "channels", "val_every",
+)
+
+
 def _config_overrides(args: argparse.Namespace) -> dict:
-    """Parse ``--config`` / ``--set`` into a flat override dict."""
+    """Parse ``--config`` / ``--set`` into a flat override dict.
+
+    Config files group training settings under ``training:`` for readability, but
+    the CLI reads a flat namespace. Flattening here is what makes
+    ``--config train-ocr`` actually change the run, and it lets ``--set`` use
+    either ``epochs=40`` or ``training.epochs=40``.
+    """
     from ..config import Config
 
     config = Config.load(*args.config, sets=args.set)
-    return config.to_dict()
+    data = config.to_dict()
+    flat: dict = {}
+    for key in _FLAT_KEYS:
+        if key in data:
+            flat[key] = data[key]
+    for section in ("training", "synthetic", "hardware", "seed"):
+        nested = data.get(section)
+        if isinstance(nested, dict):
+            for key, value in nested.items():
+                flat.setdefault(key, value)
+            # An explicit top-level value always wins over the section form.
+            for key in _FLAT_KEYS:
+                if key in nested and key in data:
+                    flat[key] = data[key]
+    if "default" in data.get("seed", {}) if isinstance(data.get("seed"), dict) else False:
+        flat.setdefault("seed", data["seed"]["default"])
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            flat[key] = value
+    return flat
 
 
 def _load_split(manifest: DatasetManifest, train_split: str, val_split: str,

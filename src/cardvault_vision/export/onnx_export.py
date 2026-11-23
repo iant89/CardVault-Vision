@@ -33,6 +33,7 @@ Torch/ONNX are optional; exporting raises a precise error with an install hint.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -51,6 +52,13 @@ _LOG = get_logger("export")
 #: accepts *and* the lowest the current torch exporter implements natively -
 #: asking for 17 makes torch warn and silently write 18 anyway.
 OPSET_VERSION = 18
+
+
+#: Tasks that may be exported and registered.
+KNOWN_TASKS = frozenset({"name-ocr", "number-ocr", "card-classifier"})
+
+#: Version strings are used as directory names, so keep them boring.
+_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass
@@ -73,6 +81,11 @@ class ExportSpec:
     training_config: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # Validate at construction so an impossible spec cannot be carried around
+        # and only explode midway through an export.
+        self.validate()
+
     @property
     def is_ocr(self) -> bool:
         return self.task in {"name-ocr", "number-ocr"}
@@ -83,14 +96,29 @@ class ExportSpec:
         return len(self.charset) + 2 if self.is_ocr else len(self.class_names)
 
     def validate(self) -> None:
-        if not self.version or "/" in self.version:
-            raise ExportError(f"Invalid version {self.version!r}")
+        """Fail before touching the filesystem or torch.
+
+        ``version`` becomes a directory name and the task becomes a registry key,
+        so both are validated strictly - a version of ``../production`` would
+        otherwise write outside the exports tree.
+        """
+        if self.task not in KNOWN_TASKS:
+            raise ExportError(
+                f"Unknown task {self.task!r}; expected one of {sorted(KNOWN_TASKS)}"
+            )
+        if not self.version or not _SAFE_VERSION.match(self.version):
+            raise ExportError(
+                f"Invalid version {self.version!r}; use digits and dots "
+                f"(for example 1.0.0 or 2026.11)"
+            )
         if self.is_ocr and not self.charset:
             raise ExportError(f"{self.task} export needs a charset")
         if not self.is_ocr and not self.class_names:
             raise ExportError("Classifier export needs class_names")
-        if self.input_height < 8 or self.input_width < 8:
+        if self.input_height < 8 or self.input_width < 8 or self.input_size < 8:
             raise ExportError("input dimensions are implausibly small")
+        if self.is_ocr and len(set(self.charset)) != len(self.charset):
+            raise ExportError("charset contains duplicate entries")
 
 
 def _graph_opset(model_path: Path) -> int:
@@ -137,6 +165,17 @@ def _artifact_checksum(model_path: Path) -> str:
     if sidecar.exists():
         digest.update(sidecar.read_bytes())
     return digest.hexdigest()
+
+
+def artifact_index_offset(spec: ExportSpec) -> int:
+    """How far ``labels.json`` is shifted from the model's output index.
+
+    OCR outputs reserve index 0 for padding and index 1 for the CTC blank, so
+    label *i* lives at output index ``i + 2``. A consumer that ignores this
+    silently shifts every decoded character. The classifier has no reserved
+    indices, hence 0.
+    """
+    return 2 if spec.is_ocr else 0
 
 
 def preprocessing_spec(spec: ExportSpec) -> dict:

@@ -1,0 +1,47 @@
+# OCR training - the Phase 3 baseline (CRNN + CTC)
+#
+# Anything here can be overridden per run:
+#   vision train name-ocr --config configs/train-ocr.yaml --set epochs=40
+#
+# The roadmap's rule for architecture comparisons: identical dataset, split,
+# seed, budget and metric. `vision train compare` enforces that; this file is
+# what it holds constant.
+
+training:
+  task: name-ocr
+  architecture: crnn
+
+  epochs: 30
+  batch_size: 32           # int, or "auto" to size from available memory
+
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  optimizer: adamw
+  scheduler: cosine
+  warmup_epochs: 0.5
+  grad_clip: 5.0
+  accumulation_steps: 1
+
+  # Opt-in and recorded. AMP changes numerics, so it is provenance, not an
+  # invisible speed switch.
+  mixed_precision: false
+
+  device: auto
+  workers: 0               # data parallelism
+  threads: null            # CPU numerical parallelism (separate on purpose)
+
+  # Validation selects the checkpoint. Early stopping watches the same metric
+  # that decides which model ships, never the training loss.
+  patience: 5
+  label_smoothing: 0.0
+  class_weighting: balanced
+
+  # Fixed input geometry shared by every OCR head.
+  input_height: 32
+  max_width: 1600
+
+  seed: 0
+
+  # The engine already supplies photometric and geometric variation, so extra
+  # jitter here would double-count it.
+  augment: false

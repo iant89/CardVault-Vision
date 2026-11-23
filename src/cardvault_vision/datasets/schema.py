@@ -63,6 +63,14 @@ CARD_TYPE_ALIASES = {
 FIELD_NAMES = ("name", "number", "set", "player", "team", "year", "rarity",
                "finish", "type_line", "mana_cost")
 
+#: Fields that carry the card's title. Games name it differently - a Pokemon card
+#: has a "name", a hockey card has a "player" - so "the card has a title" is a
+#: property of this set, not of any single key.
+TITLE_FIELDS = ("name", "player", "title")
+
+#: Fields that carry the collector number / identifier.
+NUMBER_FIELDS = ("number", "collector_number", "card_number")
+
 #: Card finishes materially change how light behaves (Phase 2.5).
 CARD_FINISHES = ("normal", "holo", "reverse_holo", "foil", "etched_foil",
                  "chrome", "refractor", "glossy", "matte")

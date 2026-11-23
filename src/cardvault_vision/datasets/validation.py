@@ -22,6 +22,8 @@ from .manifest import DatasetManifest
 from .schema import (
     CARD_TYPES,
     FIELD_NAMES,
+    NUMBER_FIELDS,
+    TITLE_FIELDS,
     Annotation,
     aspect_ratio_ok,
     normalize_card_type,
@@ -246,10 +248,15 @@ def validate_annotation(
                        f"Only {visible:.0%} of the card is inside the frame "
                        f"(min {min_card_visibility:.0%})")
 
-    if require_name and "name" not in annotation.fields:
-        report.add(image_id, "missing_name_field", "Annotation has no 'name' field")
-    if require_number and "number" not in annotation.fields:
-        report.add(image_id, "missing_number_field", "Annotation has no 'number' field")
+    # A card must have a *title*, but games name that field differently: a
+    # Pokemon card has "name", a hockey card has "player". Requiring the literal
+    # key "name" rejects perfectly good sports annotations.
+    if require_name and not any(f in annotation.fields for f in TITLE_FIELDS):
+        report.add(image_id, "missing_name_field",
+                   f"Annotation has no title field (any of {TITLE_FIELDS})")
+    if require_number and not any(f in annotation.fields for f in NUMBER_FIELDS):
+        report.add(image_id, "missing_number_field",
+                   f"Annotation has no number field (any of {NUMBER_FIELDS})")
 
     card_box = quad.to_bbox() if quad is not None else None
     for name, field_annotation in annotation.fields.items():
