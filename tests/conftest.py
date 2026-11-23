@@ -21,6 +21,48 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: slow integration test")
 
 
+def _module_available(name: str) -> bool:
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):  # pragma: no cover - broken installation
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip torch/gpu-marked tests when the dependency is missing.
+
+    Registering the markers alone did nothing: the docstring in this file claimed
+    those tests were "skipped when unavailable", but a bare interpreter without
+    torch failed the suite outright with ModuleNotFoundError. A CI job on a slim
+    image hits that on its first run, so the marker is now acted on rather than
+    merely declared.
+    """
+    reasons = {}
+    if not _module_available("torch"):
+        reasons["torch"] = "PyTorch is not installed"
+    if not _module_available("torch") or not _cuda_available():
+        reasons["gpu"] = "no CUDA device available"
+
+    for item in items:
+        for marker, reason in reasons.items():
+            if item.get_closest_marker(marker) is not None:
+                item.add_marker(pytest.mark.skip(reason=reason))
+                break
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:  # pragma: no cover - unusual torch install
+        return False
+
+
 @pytest.fixture(scope="session")
 def has_torch() -> bool:
     try:

@@ -174,6 +174,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
         sys.stderr.write("\n")
 
     payload = report.to_dict()
+    # When no seed was supplied the pipeline draws fresh entropy, so the run is
+    # unreproducible unless the chosen seed is surfaced. Barely visible next to
+    # a long integer, it is easy to miss -- which is exactly how two runs get
+    # compared as if they had used the same seed.
+    requested_seed = getattr(args, "seed", None)
+    seed_label = (f"{report.seed}" if requested_seed is not None else
+                  f"{report.seed}  (randomly chosen -- pass --seed to repeat)")
     human = "\n".join([
         heading("Synthetic dataset generated"),
         kv_block([
@@ -184,7 +191,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             ("skipped (resume)", report.skipped),
             ("duration", f"{report.duration_s:.1f}s"),
             ("throughput", f"{payload['images_per_second']:.2f} images/s"),
-            ("seed", report.seed),
+            ("seed", seed_label),
+
             ("manifest", report.manifest_path),
         ]),
         subheading("Profiles"),

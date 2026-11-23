@@ -23,14 +23,44 @@ _SPORTS_FIRST = ["Marcus", "Hank", "Derek", "Julio", "Kenji", "Alexei", "Owen",
                  "Rashid", "Diego", "Wyatt", "Sven", "Trevor"]
 _SPORTS_LAST = ["Halvorsen", "Ortiz", "Nakamura", "Delgado", "Kowalski", "Brennan",
                 "Silva", "Mbeki", "Petrov", "Sullivan", "Reyes", "Lindqvist"]
-_MAGIC_NAMES = ["Aegis of Dawn", "Wandering Hollow", "Thornlit Vanguard",
-                "Grave-Bound Scholar", "Emberwood Warden", "Silent Concord",
-                "Mirrorfall Adept", "Iron Testament", "Frostbitten Courier",
-                "Cindervale Herald", "Pale Cartographer", "Stormkeg Sentry"]
+_NAME_INITIALS = ["A.", "B.", "C.", "D.", "E.", "F.", "J.", "K.", "L.", "M.", "R.", "T."]
+_NAME_SUFFIXES = ["Jr.", "II", "III"]
+#: Magic names are *composed*, not listed. A fixed list of 12 meant 84% of a
+#: 400-card bootstrap shared a title, so an OCR model could score well by
+#: memorising the list rather than by reading glyphs - and held-out evaluation
+#: measured nothing. Composed names keep the game's flavour while giving a large
+#: space of unseen combinations.
+_MAGIC_ADJECTIVES = [
+    "Aegis", "Thornlit", "Grave-Bound", "Emberwood", "Silent", "Mirrorfall",
+    "Iron", "Frostbitten", "Cindervale", "Pale", "Stormkeg", "Wandering",
+    "Gilded", "Hollowed", "Sunless", "Riven", "Verdant", "Ashen", "Duskborn",
+    "Quartz", "Umbral", "Saltbound", "Emberlit", "Sable",
+]
+_MAGIC_NOUNS = [
+    "Scholar", "Warden", "Concord", "Adept", "Testament", "Courier", "Herald",
+    "Cartographer", "Sentry", "Vanguard", "Hollow", "Dawn", "Pilgrim",
+    "Archivist", "Oracle", "Reaver", "Lantern", "Reckoning", "Covenant",
+    "Sentinel", "Wanderer", "Bastion", "Litany", "Reliquary",
+]
+#: Roughly a third of Magic names take an "of X" epithet, which lengthens the
+#: text and exercises the CTC alignment on longer strings.
+_MAGIC_EPITHETS = [
+    "the Drowned King", "Nine Winters", "the Hollow Crown", "Broken Tides",
+    "the Last Ember", "Faded Oaths", "the Silent Choir", "Salt and Ash",
+    "the Verdant Deep", "Old Thunder",
+]
 _MAGIC_TYPES = ["Creature - Human Wizard", "Instant", "Enchantment - Aura",
                 "Sorcery", "Artifact - Equipment", "Legendary Creature - Dragon"]
-_YUGIOH_NAMES = ["Blue-Eyes Sentinel", "Dark Magus Apprentice", "Cybernetic Drake",
-                 "Shadow Realm Duelist", "Crystal Beast Tamer", "Elemental HERO Nova"]
+#: Same reasoning as the Magic pool: six fixed names gave a 91% duplication rate.
+_YUGIOH_PREFIXES = [
+    "Blue-Eyes", "Dark", "Cyber", "Shadow", "Crystal", "Elemental", "Red-Eyes",
+    "Ancient", "Twilight", "Prismatic", "Obsidian", "Storm", "Void", "Solar",
+]
+_YUGIOH_NOUNS = [
+    "Sentinel", "Magus Apprentice", "Drake", "Realm Duelist", "Beast Tamer",
+    "HERO Nova", "Guardian", "Sorcerer", "Serpent", "Paladin", "Wyrm",
+    "Duelist", "Colossus", "Harbinger",
+]
 _YUGIOH_SETS = ["LOB", "MRD", "IOC", "CRV", "EEN", "SOI"]
 
 #: Accented names exercise the universal charset (é, ü, ñ, ø ...).
@@ -102,18 +132,35 @@ def random_name(card_type: str, rng: np.random.Generator, *, allow_kana: bool = 
     if card_type == "POKEMON":
         if rng.random() < 0.08:
             return str(rng.choice(_ACCENTED))
-        return str(rng.choice(_POKEMON_ONSETS)) + str(rng.choice(_POKEMON_TAILS)).title()
+        # A small fraction gain a second syllable, e.g. "Pikachurin".
+        stem = str(rng.choice(_POKEMON_ONSETS)) + str(rng.choice(_POKEMON_TAILS)).title()
+        if rng.random() < 0.15:
+            stem += str(rng.choice(_POKEMON_TAILS))
+        return stem
     if card_type == "MAGIC_THE_GATHERING":
         if rng.random() < 0.12:
             return str(rng.choice(_ACCENTED))
-        return str(rng.choice(_MAGIC_NAMES))
+        name = f"{rng.choice(_MAGIC_ADJECTIVES)} {rng.choice(_MAGIC_NOUNS)}"
+        if rng.random() < 0.3:
+            name += f" of {rng.choice(_MAGIC_EPITHETS)}"
+        return name
     if card_type == "YU_GI_OH":
-        return str(rng.choice(_YUGIOH_NAMES))
+        name = f"{rng.choice(_YUGIOH_PREFIXES)} {rng.choice(_YUGIOH_NOUNS)}"
+        if rng.random() < 0.2:
+            name += " " + str(rng.choice(_YUGIOH_NOUNS)).split()[-1]
+        return name
     if card_type in _SPORTS_TYPES:
         name = f"{rng.choice(_SPORTS_FIRST)} {rng.choice(_SPORTS_LAST)}"
         if rng.random() < 0.1:
             return str(rng.choice(_ACCENTED))
-        return str(name)
+        # Middle initials and generational suffixes (8% and 3%) widen the space
+        # without making most names look unusual.
+        if rng.random() < 0.08:
+            name = name.split()[0] + " " + str(rng.choice(_NAME_INITIALS)) + " " \
+                + name.split()[1]
+        if rng.random() < 0.03:
+            name += " " + str(rng.choice(_NAME_SUFFIXES))
+        return name
     return f"Card {int(rng.integers(1, 9999))}"
 
 
