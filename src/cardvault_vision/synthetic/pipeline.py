@@ -203,17 +203,40 @@ class SourcePool:
     def __len__(self) -> int:
         return len(self.cards)
 
+    #: How many times more likely the busiest card may be than under a uniform
+    #: draw. Type balancing alone is unbounded: with one basketball card among
+    #: seven types that single card took 43% of all draws, so 290 of 700 samples
+    #: shared one name. OCR cannot learn a vocabulary from that, and neither can
+    #: a classifier learn a class from one example repeated.
+    MAX_CARD_DOMINANCE = 4.0
+
+    def card_probabilities(self) -> np.ndarray:
+        """Per-card selection probability, type-balanced and dominance-capped."""
+        types = sorted(self.by_type)
+        weights = np.array([len(self.by_type[t]) for t in types], dtype=np.float64)
+        type_weights = 1.0 / weights
+        type_weights /= type_weights.sum()
+        per_card = np.zeros(len(self.cards), dtype=np.float64)
+        for weight, name in zip(type_weights, types, strict=True):
+            indices = self.by_type[name]
+            per_card[indices] = weight / len(indices)
+        # Clip the offenders and push the excess onto the cards that are still
+        # below the cap, so the distribution stays normalised.
+        cap = self.MAX_CARD_DOMINANCE / len(self.cards)
+        if per_card.max() > cap:
+            excess = float(np.maximum(per_card - cap, 0.0).sum())
+            per_card = np.minimum(per_card, cap)
+            headroom = cap - per_card
+            if headroom.sum() > 0:
+                per_card += excess * headroom / headroom.sum()
+            per_card /= per_card.sum()
+        return per_card
+
     def choose(self, rng: np.random.Generator, *, uniform: bool = False) -> SourceCard:
         if uniform:
             return self.cards[int(rng.integers(0, len(self.cards)))]
-        types = sorted(self.by_type)
-        # Every card type equally likely, then uniform within the type.
-        weights = np.array([len(self.by_type[t]) for t in types], dtype=np.float64)
-        type_weights = (1.0 / weights)
-        type_weights /= type_weights.sum()
-        chosen_type = types[int(rng.choice(len(types), p=type_weights))]
-        pool = self.by_type[chosen_type]
-        return self.cards[pool[int(rng.integers(0, len(pool)))]]
+        index = int(rng.choice(len(self.cards), p=self.card_probabilities()))
+        return self.cards[index]
 
 
 def load_source_pool(source: DatasetManifest | str | Path, *,

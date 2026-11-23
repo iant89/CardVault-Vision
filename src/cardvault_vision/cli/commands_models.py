@@ -262,12 +262,15 @@ def _resolve_ocr_field(manifest, task_key: str) -> str:
             if name in fields and fields[name].text.strip():
                 counts[name] += 1
     total = len(manifest.samples)
-    # Only consider fields that appear in *every* split, otherwise a field can
-    # cover the training data and still leave validation empty - which surfaced
-    # as "No usable training samples for field 'player'" from the validation
-    # loader rather than as an explanation.
-    splits = sorted({sample.split for sample in manifest.samples if sample.split})
-    per_split = {name: {split: 0 for split in splits} for name in wanted}
+    # Require the field in the splits that *train* (train and val): a field that
+    # covers the training data but not validation yields an empty val set and a
+    # confusing "No usable training samples" failure. Test is deliberately not
+    # required - it is often a handful of samples, and excluding a field whose
+    # 598 training samples are usable because 5 test samples lack it would be
+    # worse than warning.
+    splits = sorted({sample.split for sample in manifest.samples
+                     if sample.split in ("train", "val")})
+    per_split = {name: {"train": 0, "val": 0, "test": 0} for name in wanted}
     for sample in manifest.samples:
         fields = sample.annotation.fields
         for name in wanted:
@@ -296,6 +299,10 @@ def _resolve_ocr_field(manifest, task_key: str) -> str:
     else:
         _LOG.info("Using field %r for %s (%d/%d samples)", best, task_key,
                   counts[best], total)
+    if "test" in per_split.get(best, {}) and not per_split[best].get("test"):
+        _LOG.warning(
+            "Field %r has no test-split samples, so held-out evaluation of %s "
+            "will be empty", best, task_key)
     return best
 
 

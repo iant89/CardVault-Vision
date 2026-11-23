@@ -106,6 +106,18 @@ class TestOcrFieldResolution:
         cards = [("POKEMON", {"name": "Pikachu"})] * 8
         assert _resolve_ocr_field(self._manifest(cards), "name-ocr") == "name"
 
+    def test_test_split_absence_only_warns(self):
+        """Test is often a handful of samples. A field with 598 usable training
+        samples must not be rejected because 5 test samples lack it -- warn and
+        keep going instead."""
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        manifest = self._manifest([("BASEBALL", {"player": "A"})] * 8)
+        for sample in manifest.samples:
+            if sample.split == "test":
+                sample.annotation.fields.pop("player", None)
+        assert _resolve_ocr_field(manifest, "name-ocr") == "player"
+
     def test_field_missing_from_a_split_is_not_chosen(self):
         """A field that covers train but no validation is worse than useless:
         it yields an empty val set and a confusing training failure."""

@@ -135,6 +135,55 @@ class TestProfiles:
         assert phone.target_size != scanner.target_size
 
 
+class TestSourcePoolBalance:
+    """Type balancing must not let one card dominate the whole run."""
+
+    def _pool(self, type_counts):
+        from cardvault_vision.synthetic.generator import SourceCard
+        from cardvault_vision.synthetic.pipeline import SourcePool
+
+        cards = []
+        for type_name, count in type_counts.items():
+            for index in range(count):
+                cards.append(SourceCard(
+                    card_id=f"{type_name}_{index}", card_type=type_name,
+                    image=np.zeros((8, 8, 3), dtype=np.uint8), fields={},
+                ))
+        return SourcePool(cards)
+
+    def test_every_card_is_reachable(self):
+        """A type with one card used to take 43% of all draws (290 of 700
+        samples carried the same name), which leaves OCR nothing to learn and
+        a classifier nothing to learn *from*."""
+        pool = self._pool({"BASKETBALL": 1, "FOOTBALL": 2, "POKEMON": 26})
+        probabilities = pool.card_probabilities()
+        assert len(probabilities) == len(pool.cards)
+        assert probabilities.min() > 0, "some cards can never be selected"
+        assert probabilities.sum() == pytest.approx(1.0)
+
+    def test_dominance_is_capped(self):
+        pool = self._pool({"BASKETBALL": 1, "FOOTBALL": 2, "POKEMON": 26})
+        probabilities = pool.card_probabilities()
+        uniform = 1.0 / len(pool.cards)
+        assert probabilities.max() <= pool.MAX_CARD_DOMINANCE * uniform + 1e-9
+
+    def test_small_types_are_still_represented(self):
+        """Capping must not undo the type balancing it exists to temper.
+
+        The lone basketball card must still be drawn far more often than any
+        single Pokemon card (which is what prevents a 26-card type from burying
+        a 1-card type), while the whole Pokemon type keeps most of the mass.
+        """
+        pool = self._pool({"BASKETBALL": 1, "POKEMON": 26})
+        probabilities = pool.card_probabilities()
+        basketball = probabilities[pool.by_type["BASKETBALL"][0]]
+        any_pokemon = probabilities[pool.by_type["POKEMON"]][0]
+        pokemon_total = probabilities[pool.by_type["POKEMON"]].sum()
+        assert basketball > any_pokemon, (
+            "the lone basketball card should outrank any individual Pokemon card")
+        assert pokemon_total > basketball
+
+
 class TestQualityControl:
     def test_unusable_samples_are_rejected_not_written(self, pool):
         """A sample nobody can read is a bad label, so it must be refused."""
