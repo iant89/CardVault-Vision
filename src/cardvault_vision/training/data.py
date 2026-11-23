@@ -322,8 +322,15 @@ class OCRDataset:
                 yield list(order[start:start + batch_size])
             return
         ordered = sorted(order, key=lambda i: self.widths[i])
-        chunk = max(batch_size * 8, batch_size)
-        groups = [ordered[i:i + chunk] for i in range(0, len(ordered), chunk)]
+        # Shuffle *within* a window rather than within a big chunk. A chunk of
+        # batch_size*8 spans a wide width range on real data (crops run 90 px to
+        # 1166 px here), so random batches drawn from it pair a short crop with a
+        # long one and the batch pays the long crop's cost: at 8x, 1166 px costs
+        # 685 ms versus 78 ms for a 166 px batch, because the BiGRU and the
+        # padded convolutions both scale with width. A window of a few batches
+        # keeps randomness while keeping widths comparable.
+        window = max(batch_size * 2, batch_size)
+        groups = [ordered[i:i + window] for i in range(0, len(ordered), window)]
         if shuffle:
             rng.shuffle(groups)
         batches: list[list[int]] = []

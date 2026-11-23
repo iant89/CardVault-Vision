@@ -91,6 +91,45 @@ class TestOcrContract:
         assert int(model.output_length(200)) >= 4 * len(name) // 2
 
 
+class TestOcrBatchBucketing:
+    """Batches must group similar widths; cost scales with the widest crop."""
+
+    def _dataset(self, widths, require_torch):
+        from cardvault_vision.training.data import OCRDataset
+
+        dataset = OCRDataset.__new__(OCRDataset)
+        import numpy as np
+
+        dataset.items = [(np.zeros((32, w), dtype=np.float32), [1], "x") for w in widths]
+        dataset.widths = list(widths)
+        return dataset
+
+    def test_batches_do_not_pair_short_crops_with_long_ones(self, require_torch):
+        """Measured on real data, one 1166 px crop in a batch of 8 costs 685 ms
+        versus 78 ms for a 166 px batch, so a short crop padded to a long batch
+        is billed at the long crop's price. Shuffling within a wide window made
+        that the common case (23% padding); within a narrow window it is 10%.
+        """
+        # A realistic mixture: most crops are short, with a long tail.
+        widths = [90] * 120 + [150] * 120 + [260] * 60 + [1166] * 4
+        dataset = self._dataset(widths, require_torch)
+        padding = 0
+        real = 0
+        for batch in dataset.length_batches(8, shuffle=True, seed=3, buckets=4):
+            widest = max(widths[i] for i in batch)
+            real += sum(widths[i] for i in batch)
+            padding += widest * len(batch)
+        assert padding, "no batches produced"
+        assert (padding - real) / padding < 0.15
+
+    def test_every_item_appears_exactly_once_per_epoch(self, require_torch):
+        widths = [90 + 7 * i for i in range(53)]
+        dataset = self._dataset(widths, require_torch)
+        seen = [int(i) for batch in dataset.length_batches(8, shuffle=True, seed=1)
+                for i in batch]
+        assert sorted(seen) == list(range(len(widths)))
+
+
 class TestClassifierContract:
     def test_shape_and_class_count(self, require_torch):
         import torch
