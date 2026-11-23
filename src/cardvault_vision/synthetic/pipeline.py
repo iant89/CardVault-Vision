@@ -447,7 +447,7 @@ def generate_dataset(
         manifest_hash = source.version.content_hash or source.manifest_checksum()
 
     profile_weights = resolve_profiles(config.profile)
-    other_cards = [card.image for card in pool.cards if card.card_type == pool.cards[0].card_type][:8]
+    other_cards = _other_cards_for(pool)
 
     recorder = run_recorder or RunRecorder(out_dir / "run", quiet=True)
     recorder.event("synthetic_start", dataset=config.dataset_name, count=config.count,
@@ -658,7 +658,9 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
             executor.submit(_worker_generate, index, seed, config.to_dict(),
                             out_dir=str(out_dir), profile_weights=profile_weights,
                             source_path=None if source_path is None else str(source_path),
-                            other_cards=other_cards,
+                            # Just the count, never the pixels: the worker rebuilds
+                            # the arrays from its own cached pool.
+                            other_cards=len(other_cards) if other_cards else 0,
                             ): index
             for index, _, _ in payload
         }
@@ -689,12 +691,38 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
 
 _WORKER_POOL: SourcePool | None = None
 _WORKER_POOL_KEY: str | None = None
+_WORKER_OTHER_CARDS: list | None = None
+
+
+def _worker_other_cards() -> list:
+    """Occluder candidates derived from the worker's cached source pool.
+
+    These used to be pickled into *every* task payload: eight 880x630x3 arrays
+    came to 13.3 MB per task, so a 1500-sample run queued 20 GB of pickles
+    through the pool's feeder thread and appeared to hang (the parent stayed
+    alive at 3% CPU while the newest image on disk was minutes old). Deriving
+    them once per worker process instead costs one load per worker and nothing
+    per task, and it stays deterministic because it reads the same pool with the
+    same rule as the in-process path.
+    """
+    global _WORKER_OTHER_CARDS
+    if _WORKER_OTHER_CARDS is None:
+        _WORKER_OTHER_CARDS = _other_cards_for(_WORKER_POOL) if _WORKER_POOL else []
+    return _WORKER_OTHER_CARDS
+
+
+def _other_cards_for(pool: SourcePool) -> list:
+    """The at-most-8 same-type card images used as occluders."""
+    if not pool.cards:
+        return []
+    return [card.image for card in pool.cards
+            if card.card_type == pool.cards[0].card_type][:8]
 
 
 def _worker_generate(index: int, seed: int, config_dict: dict, *,
                      out_dir: str, profile_weights: dict[str, float],
                      source_path: str | None = None,
-                     other_cards: list | None = None):
+                     other_cards: int = 0):
     """Worker entry point (module-level so it is picklable)."""
     global _WORKER_POOL, _WORKER_POOL_KEY
 
@@ -719,13 +747,19 @@ def _worker_generate(index: int, seed: int, config_dict: dict, *,
                        profile_weights=profile_weights)
     out_path = Path(out_dir)
 
+    pool_others = _worker_other_cards()
     other = None
-    if other_cards:
+    if pool_others and other_cards:
         # Same derivation as the in-process path: a sample rendered with a
         # different occluding card is a different image, so serial and parallel
         # runs must choose identically or the determinism guarantee breaks.
+        #
+        # ``other_cards`` is only a *flag* here (it carries the count, not the
+        # pixels): the images are rebuilt from the worker's own cached pool. See
+        # _worker_other_cards for why shipping the arrays through the task
+        # payload is not acceptable.
         chooser = rng_for(seed, "other_card", index)
-        other = other_cards[int(chooser.integers(0, len(other_cards)))]
+        other = pool_others[int(chooser.integers(0, len(pool_others)))]
 
     def handle(working_plan: SamplePlan, other_card):
         # ``other_card`` may be a retry-adjusted plan's occluder; fall back to the

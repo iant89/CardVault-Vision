@@ -196,6 +196,31 @@ class TestGenerationResume:
         assert second.generated == 0
         assert second.skipped == first.generated + first.skipped
 
+    def test_parallel_tasks_do_not_carry_card_pixels(self, source_dataset, tmp_path):
+        """The worker payload must stay O(1), not O(card pixels).
+
+        The occluder candidates used to be shipped inside every submitted task:
+        eight 880x630x3 arrays, 13.3 MB pickled *per task*. A 1500-sample run
+        queued 20 GB through the pool's feeder thread and appeared to hang - the
+        parent stayed alive at 3% CPU while the newest image on disk grew minutes
+        old. Passing only the count keeps the payload small; the worker rebuilds
+        the arrays from its own cached pool.
+        """
+        import pickle
+
+        from cardvault_vision.synthetic import SyntheticConfig
+        from cardvault_vision.synthetic.pipeline import _worker_generate
+
+        config = SyntheticConfig(profile="phone_normal", count=2, seed=7,
+                                 render_scale=0.25, workers=2)
+        payload = pickle.dumps((0, 7, config.to_dict(),
+                                {"out_dir": str(tmp_path), "profile_weights": {}},
+                                {"source_path": "/tmp/source.json",
+                                 "other_cards": 8}))
+        # A single card image alone is ~1.6 MB, so anything near that means the
+        # arrays are back in the payload.
+        assert len(payload) < 64_000, f"worker payload grew to {len(payload)} bytes"
+
     def test_worker_count_does_not_change_the_output(self, source_dataset, tmp_path):
         """Parallel generation must be byte-identical to serial.
 
