@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Data. CardVault Vision is a model factory: images, annotations and archives
+# are intentionally NOT tracked in Git. Manifests, configs and the golden
+# dataset checksum file ARE tracked (they are small and are the contract).
+# ---------------------------------------------------------------------------
+datasets/source/**/*
+datasets/real/**/*
+datasets/annotations/**/*
+datasets/synthetic/**/*
+datasets/manifests/generated-*.json
+!datasets/**/.gitkeep
+!datasets/**/README.md
+!datasets/golden/**
+datasets/golden/**/*.jpg
+datasets/golden/**/*.jpeg
+datasets/golden/**/*.png
+
+# Model artifacts
+exports/**/*.onnx
+exports/**/*.pt
+exports/**/*.pth
+exports/**/*.ckpt
+!exports/**/metadata.json
+!exports/**/labels.json
+!exports/**/preprocessing.json
+!exports/**/checksum.sha256
+!exports/**/contract.json
+!exports/**/validation.json
+
+# Experiment runs
+experiments/*/*
+!experiments/.gitkeep
+
+# Local scratch
+tmp/
+scratch/
+*.log
+.DS_Store

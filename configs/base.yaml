@@ -1,0 +1,46 @@
+# CardVault Vision - base configuration
+#
+# Every run resolves in this order (later wins):
+#   1. built-in defaults
+#   2. config files, left to right   (this file, then a profile-specific one)
+#   3. CLI --set key=value overrides
+#
+# The merged result is fingerprinted (BLAKE2b of canonical JSON) and recorded in
+# every synthetic manifest and exported model. Two runs with the same SOURCE +
+# CONFIG + SEED therefore produce byte-identical datasets, and any difference is
+# attributable to a config change you can see in the fingerprint.
+
+project:
+  name: CardVault Vision
+  # Bump when a change alters generated pixels; manifests record it so old
+  # datasets are never silently re-interpreted under new rules.
+  schema_version: "1.0"
+
+paths:
+  datasets: datasets
+  experiments: experiments
+  exports: exports
+  golden: datasets/golden
+
+seed:
+  # Master seed. Overridden per command by --seed.
+  default: 12345
+  # Derived streams are BLAKE2b(master, purpose, index) rather than one global
+  # RNG, so re-ordering work items cannot change any individual sample.
+  scheme: counter_based
+
+logging:
+  level: INFO
+  # Per-phase timing on every run; without it, throughput regressions are
+  # invisible until a dataset takes all night.
+  timings: true
+
+hardware:
+  device: auto          # auto | cpu | cuda | cuda:N
+  # Data-loading parallelism (worker processes).
+  workers: 0
+  # CPU numerical parallelism (torch/BLAS threads). Deliberately separate from
+  # workers: setting both to N on an N-core box oversubscribes it by N times.
+  threads: null         # null = let the library decide
+  # Fail loudly instead of silently falling back to CPU when CUDA was requested.
+  strict_device: true

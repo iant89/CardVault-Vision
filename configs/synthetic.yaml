@@ -1,0 +1,53 @@
+# Synthetic scan engine - production distribution (Phase 2)
+#
+# This is the config the shipped dataset is generated with. It simulates a
+# *camera capture*, not an augmentation: geometry, optics, illumination,
+# materials, occluders and sensor noise are all composed, and the result is
+# passed through a JPEG encoder like a real phone photo.
+#
+# Defaults live in synthetic/profiles.py; this file only pins the choices that
+# matter for a production run so they are reviewable in one place.
+
+synthetic:
+  # Which capture profile mixture the dataset should match. "realistic" mirrors
+  # what users actually upload: mostly mid-range phones, some bad lighting,
+  # a few scanners.
+  profile: realistic
+  profile_mix:
+    phone_normal: 0.55
+    phone_bad_lighting: 0.20
+    phone_low_end: 0.12
+    scanner: 0.08
+    child_camera: 0.05
+
+  # clean | normal | poor | extreme | targeted
+  mode: normal
+
+  # Fraction of samples deliberately given a named degradation.
+  problem_rate: 0.15
+  problems:
+    - glare
+    - blur
+    - low_light
+    - perspective
+    - occlusion
+    - compression
+
+  # Render at higher resolution then downsample: this is what produces the
+  # characteristic softness of a small sensor rather than perfectly crisp pixels.
+  render_scale: 1.0
+  supersample: 2
+
+  # Quality control. A sample that cannot be read by a human is not a useful
+  # training label, so it is rejected rather than written with a bad annotation.
+  quality:
+    min_sharpness: 60.0
+    max_clipped_fraction: 0.12
+    max_crushed_fraction: 0.18
+    min_card_visibility: 0.65
+    min_legibility: 0.35
+    max_field_occlusion: 0.55
+
+  # Every sample records its full generation parameters and stream seeds.
+  record_generation: true
+  jpeg_on_final: true
