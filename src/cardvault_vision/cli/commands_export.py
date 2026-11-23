@@ -9,7 +9,6 @@ from pathlib import Path
 from ..console import format_table, heading, kv_block, subheading
 from ..errors import ExportError
 from ..export import (
-    ExportSpec,
     artifact_manifest,
     export_onnx,
     list_versions,
@@ -18,7 +17,6 @@ from ..export import (
     promote,
     register_export,
     spec_from_checkpoint,
-    validate_all,
     validate_export,
 )
 from ..logging_utils import get_logger

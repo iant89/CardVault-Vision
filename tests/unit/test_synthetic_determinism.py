@@ -11,13 +11,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cardvault_vision.synthetic import CaptureProfile, SyntheticConfig
+from cardvault_vision.errors import ConfigError, GenerationError
+from cardvault_vision.synthetic import CaptureProfile, SyntheticConfig, generate_sample
 from cardvault_vision.synthetic.pipeline import (
     load_source_pool,
     plan_sample,
     resolve_profiles,
 )
-from cardvault_vision.synthetic import generate_sample
 
 # Small and forgiving: these tests are about determinism, not image quality, so
 # they must not be flaky when a particular seed happens to draw low legibility.
@@ -65,7 +65,7 @@ class TestDeterminism:
         """
         forward = [_generate(pool, index=i, seed=7) for i in range(3)]
         backward = [_generate(pool, index=i, seed=7) for i in (2, 1, 0)][::-1]
-        for a, b in zip(forward, backward):
+        for a, b in zip(forward, backward, strict=True):
             assert np.array_equal(a.image, b.image)
 
 
@@ -126,7 +126,7 @@ class TestProfiles:
         assert abs(sum(weights.values()) - 1.0) < 1e-6
 
     def test_unknown_profile_is_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ConfigError, match="Unknown profile"):
             CaptureProfile.get("no-such-profile")
 
     def test_each_profile_has_a_distinct_character(self):
@@ -144,7 +144,7 @@ class TestQualityControl:
         weights = resolve_profiles("phone_normal")
         plan = plan_sample(index=0, seed=1, pool=pool, config=config,
                            profile_weights=weights)
-        with pytest.raises(Exception):
+        with pytest.raises(GenerationError, match="not usable"):
             generate_sample(plan.source_card, plan.config, seed=1, index=0)
 
 
@@ -176,7 +176,8 @@ class TestImagingPrimitives:
         """Motion blur must stay anisotropic; a symmetric approximation would
         erase the very cue that makes the 'blur' category learnable."""
         from cardvault_vision.synthetic.imaging import (
-            convolve, gaussian_blur, motion_blur_kernel,
+            convolve,
+            motion_blur_kernel,
         )
 
         image = np.zeros((61, 61, 3), dtype=np.float32)

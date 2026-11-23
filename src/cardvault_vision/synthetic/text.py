@@ -21,7 +21,6 @@ bitmap font so generation never hard-fails.
 
 from __future__ import annotations
 
-import math
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache

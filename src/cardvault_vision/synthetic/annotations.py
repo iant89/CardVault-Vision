@@ -19,13 +19,12 @@ The annotation payload written by the pipeline is
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-import numpy as np
-
-from ..datasets.schema import Annotation, BBox, FieldAnnotation
+from ..datasets.schema import Annotation, BBox
 from ..errors import ValidationError
 from ..logging_utils import get_logger
 from ..version import SCHEMA_VERSION

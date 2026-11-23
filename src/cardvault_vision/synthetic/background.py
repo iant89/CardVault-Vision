@@ -21,15 +21,12 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .imaging import (
-    adjust_saturation,
     convolve,
     fbm,
     gaussian_kernel,
+    hsv_to_rgb,
     linear_mask,
     radial_mask,
-    resize,
-    rgb_to_hsv,
-    hsv_to_rgb,
     screen_blend,
     soft_light,
     value_noise,

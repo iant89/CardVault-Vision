@@ -9,6 +9,7 @@ import pytest
 from cardvault_vision.datasets import DatasetLoader, DatasetManifest
 from cardvault_vision.datasets.hashing import dataset_content_hash, file_sha256
 from cardvault_vision.datasets.split import split_dataset
+from cardvault_vision.errors import DatasetError
 
 
 class TestManifest:
@@ -67,6 +68,58 @@ class TestHashing:
                 != dataset_content_hash([("a.png", "feedface")]))
 
 
+class TestOcrFieldResolution:
+    """``train name-ocr`` must pick a field the split actually contains."""
+
+    def _manifest(self, cards):
+        from cardvault_vision.datasets import DatasetManifest
+        from cardvault_vision.datasets.schema import Annotation, BBox, FieldAnnotation, SampleRecord
+
+        samples = []
+        for index, (card_type, fields) in enumerate(cards):
+            annotation = Annotation(
+                image_id=f"{index:04d}", card_id=f"card{index}", card_type=card_type,
+                width=100, height=100,
+                fields={name: FieldAnnotation(
+                    text=text, bbox=BBox(1, 1, 40, 20)) for name, text in fields.items()},
+            )
+            samples.append(SampleRecord(
+                image_id=f"{index:04d}", card_id=f"card{index}",
+                image_path=f"images/{index:04d}.jpg", annotation=annotation,
+                split="train" if index % 4 else "val",
+            ))
+        return DatasetManifest(name="fixture", samples=samples)
+
+    def test_title_field_falls_back_to_player_when_name_is_rare(self):
+        """Sports layouts put the title in ``player``; name-ocr used to hardcode
+        ``name`` and silently skip 92% of a mixed dataset."""
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        cards = [("POKEMON", {"name": "Pikachu"})]
+        cards += [("BASEBALL", {"player": "Ken Griffey"})] * 8
+        # Enough ``name`` samples in every split to be usable, but sports dominate.
+        assert _resolve_ocr_field(self._manifest(cards), "name-ocr") == "player"
+
+    def test_canonical_field_is_kept_when_it_is_usable(self):
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        cards = [("POKEMON", {"name": "Pikachu"})] * 8
+        assert _resolve_ocr_field(self._manifest(cards), "name-ocr") == "name"
+
+    def test_field_missing_from_a_split_is_not_chosen(self):
+        """A field that covers train but no validation is worse than useless:
+        it yields an empty val set and a confusing training failure."""
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        cards = [("BASEBALL", {"player": "A"})] * 3 + [("POKEMON", {"name": "B"})] * 3
+        # Drop ``player`` from every val sample.
+        manifest = self._manifest(cards)
+        for sample in manifest.samples:
+            if sample.split == "val":
+                sample.annotation.fields.pop("player", None)
+        assert _resolve_ocr_field(manifest, "name-ocr") == "name"
+
+
 class TestSplitting:
     def test_splits_are_disjoint_and_complete(self, source_dataset):
         manifest = DatasetManifest.load(source_dataset / "manifest.json")
@@ -74,6 +127,36 @@ class TestSplitting:
         assigned = list(plan.assignments)
         assert len(assigned) == len(set(assigned)), "a card appears in two splits"
         assert set(assigned) == set(manifest.card_ids)
+
+    def test_each_stratum_is_split_proportionally(self):
+        """Allocation must happen per stratum, not over one global sequence.
+
+        The old code interleaved every stratum into one list and sliced a prefix
+        per split. With a dominant stratum first, val and test were filled
+        entirely from it: a 4:1 split of a mixed dataset sent all 621 sports
+        cards to train and left val holding only TCG types, so training a field
+        that only sports cards carry had an empty validation set.
+
+        Four equal strata make the property unambiguous: each must contribute to
+        all three splits, and every card must be assigned exactly once.
+        """
+        from collections import Counter
+
+        from cardvault_vision.datasets.split import _allocate
+
+        strata = [[[f"t{i}c{j}"] for j in range(25)] for i in range(4)]
+        ratios = {"train": 0.8, "val": 0.1, "test": 0.1}
+        assignments: dict[str, str] = {}
+        for index, groups in enumerate(strata):
+            assignments.update(
+                _allocate(groups, ratios, warning_prefix=f"s{index}"))
+
+        assert len(assignments) == sum(len(group) for stratum in strata
+                                       for group in stratum)
+        for index, groups in enumerate(strata):
+            counts = Counter(assignments[card] for group in groups for card in group)
+            assert counts["val"] > 0 and counts["test"] > 0, (
+                f"stratum s{index} did not reach every split: {dict(counts)}")
 
     def test_no_card_leaks_between_train_and_test(self, source_dataset):
         """The central Phase 1 guarantee.
@@ -130,9 +213,11 @@ class TestLoader:
     def test_bad_root_is_reported(self, source_dataset, tmp_path):
         manifest = DatasetManifest.load(source_dataset / "manifest.json")
         manifest.root = tmp_path / "does-not-exist"
-        with pytest.raises(Exception):
-            dataset = DatasetLoader(manifest)
-            dataset.validate()
+        # This used to assert only that *something* raised, and what actually
+        # raised was AttributeError: DatasetLoader has no .validate(). The real
+        # contract is that loading from a bad root names the missing image.
+        with pytest.raises(DatasetError, match="Missing image"):
+            list(DatasetLoader(manifest, limit=1))
 
 
 class TestCardTypeTaxonomy:
@@ -200,7 +285,6 @@ class TestDemoVocabulary:
         import numpy as np
 
         from cardvault_vision.demo import random_fields
-        from cardvault_vision.datasets.schema import CARD_TYPES
 
         rng = np.random.default_rng(0)
         for card_type in ("SPORTS", "BASEBALL", "FOOTBALL", "BASKETBALL", "HOCKEY"):
@@ -220,8 +304,8 @@ class TestDemoVocabulary:
     def test_random_card_type_returns_only_canonical_types(self):
         import numpy as np
 
-        from cardvault_vision.demo import random_card_type
         from cardvault_vision.datasets.schema import CARD_TYPES
+        from cardvault_vision.demo import random_card_type
 
         rng = np.random.default_rng(0)
         for _ in range(200):

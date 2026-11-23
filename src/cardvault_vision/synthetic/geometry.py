@@ -26,7 +26,7 @@ Design notes
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -393,7 +393,7 @@ def warp_field_boxes(
     names = list(fields)
     quads = result.warp_boxes([fields[name] for name in names])
     out = {}
-    for name, quad in zip(names, quads):
+    for name, quad in zip(names, quads, strict=True):
         out[name] = result.envelope(quad, clamp=clamp)
     return out
 

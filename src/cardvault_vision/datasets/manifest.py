@@ -23,10 +23,11 @@ Manifest kinds
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 from ..config import canonical_json, fingerprint
 from ..errors import DatasetError
@@ -69,7 +70,7 @@ class DatasetVersion:
         return out
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "DatasetVersion":
+    def from_dict(cls, data: Mapping[str, Any]) -> DatasetVersion:
         return cls(
             version=str(data.get("version", "0.0.0")),
             content_hash=data.get("content_hash"),
@@ -114,7 +115,7 @@ class DatasetManifest:
         root: str | Path = ".",
         version: str = "0.0.0",
         description: str | None = None,
-    ) -> "DatasetManifest":
+    ) -> DatasetManifest:
         return cls(
             name=name,
             kind=kind,
@@ -166,7 +167,7 @@ class DatasetManifest:
     def config_hash(self) -> str:
         return fingerprint(self.config) if self.config else ""
 
-    def seal(self, *, version: str | None = None) -> "DatasetManifest":
+    def seal(self, *, version: str | None = None) -> DatasetManifest:
         """Compute and stamp the content hash (call once generation is complete)."""
         if version:
             self.version.version = version
@@ -209,7 +210,7 @@ class DatasetManifest:
 
     @classmethod
     def load(cls, path: str | Path, *, root: str | Path | None = None,
-             lazy: bool = False) -> "DatasetManifest":
+             lazy: bool = False) -> DatasetManifest:
         """Load a manifest.
 
         ``root`` overrides the recorded root, which makes a dataset relocatable
@@ -250,7 +251,7 @@ class DatasetManifest:
         candidate = Path(image_path)
         return candidate if candidate.is_absolute() else self.root / candidate
 
-    def attach_provenance(self, record: ReproRecord, **extra: Any) -> "DatasetManifest":
+    def attach_provenance(self, record: ReproRecord, **extra: Any) -> DatasetManifest:
         self.provenance = {**record.to_dict(), **extra}
         return self
 

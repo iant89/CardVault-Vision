@@ -6,11 +6,9 @@ architecture is a matter of registering it here and nothing else changes.
 
 from __future__ import annotations
 
-from typing import Callable
-
 from ..errors import ConfigError
-from .classifier import ClassifierConfig, build_classifier
-from .ocr import OCRModelConfig, OCR_ARCHITECTURES, build_ocr
+from .classifier import ClassifierConfig
+from .ocr import build_ocr
 
 #: Task name -> {architecture name: description}.
 MODEL_REGISTRY: dict[str, dict[str, str]] = {

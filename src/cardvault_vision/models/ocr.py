@@ -25,8 +25,8 @@ Design notes
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from ..errors import ConfigError
 from . import require_torch
@@ -289,7 +289,6 @@ class OCRModelConfig:
 
 def model_summary(model) -> dict:
     """Parameter count, size and per-layer shape summary (torch required)."""
-    torch = _torch()
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return {

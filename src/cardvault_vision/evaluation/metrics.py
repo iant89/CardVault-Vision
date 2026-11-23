@@ -12,12 +12,11 @@ what makes regression testing (Phase 18) possible on a plain CI box.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Edit distance
@@ -54,7 +53,7 @@ def character_error_rate(predictions: Sequence[str], references: Sequence[str]) 
         raise ValueError("predictions and references must be the same length")
     if not references:
         return float("nan")
-    total_distance = sum(edit_distance(p, r) for p, r in zip(predictions, references))
+    total_distance = sum(edit_distance(p, r) for p, r in zip(predictions, references, strict=True))
     total_length = sum(len(r) for r in references) or 1
     return total_distance / total_length
 
@@ -65,7 +64,7 @@ def word_error_rate(predictions: Sequence[str], references: Sequence[str]) -> fl
         return float("nan")
     total_distance = 0
     total_words = 0
-    for prediction, reference in zip(predictions, references):
+    for prediction, reference in zip(predictions, references, strict=True):
         pred_words = prediction.split()
         ref_words = reference.split()
         total_distance += _token_distance(pred_words, ref_words)
@@ -87,7 +86,7 @@ def _token_distance(prediction: Sequence[str], reference: Sequence[str]) -> int:
 def exact_match(predictions: Sequence[str], references: Sequence[str]) -> float:
     if not references:
         return float("nan")
-    return sum(p == r for p, r in zip(predictions, references)) / len(references)
+    return sum(p == r for p, r in zip(predictions, references, strict=True)) / len(references)
 
 
 def character_accuracy(predictions: Sequence[str], references: Sequence[str]) -> float:
@@ -207,7 +206,7 @@ def build_confusion_matrix(predictions: Sequence[str], references: Sequence[str]
     (which is what a naive ``zip`` would do, and it produces garbage).
     """
     matrix: dict[str, dict[str, int]] = {}
-    for prediction, reference in zip(predictions, references):
+    for prediction, reference in zip(predictions, references, strict=True):
         for ref_char, pred_char in _aligned_pairs(prediction, reference):
             if ref_char == pred_char:
                 continue
@@ -269,10 +268,11 @@ def evaluate_ocr(
     predictions = [p or "" for p in predictions]
     references = [r or "" for r in references]
 
-    per_sample = [edit_distance(p, r) / max(len(r), 1) for p, r in zip(predictions, references)]
+    per_sample = [edit_distance(p, r) / max(len(r), 1)
+                  for p, r in zip(predictions, references, strict=True)]
 
     buckets: dict[str, dict[str, float]] = {}
-    for prediction, reference, sample_cer in zip(predictions, references, per_sample):
+    for prediction, reference in zip(predictions, references, strict=False):
         bucket = _length_bucket(len(reference))
         entry = buckets.setdefault(bucket, {"count": 0, "distance": 0, "length": 0,
                                             "exact": 0})
@@ -366,7 +366,7 @@ class ClassificationReport:
 
     def report(self) -> str:
         rows = [[name, *(str(v) for v in row)] for name, row in
-                zip(self.class_names, self.confusion)]
+                zip(self.class_names, self.confusion, strict=True)]
         from ..console import format_table, kv_block
 
         lines = [
@@ -407,7 +407,7 @@ def evaluate_classification(
     matrix = [[0] * len(class_names) for _ in class_names]
     total = 0
     correct = 0
-    for reference, prediction in zip(refs, preds):
+    for reference, prediction in zip(refs, preds, strict=True):
         if reference not in index:
             continue
         row = index[reference]

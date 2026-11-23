@@ -22,8 +22,9 @@ distribution, e.g.::
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 from ..config import deep_merge
 from ..errors import ConfigError
@@ -498,7 +499,7 @@ class CaptureProfile:
     data: dict = field(default_factory=default_profile_dict)
 
     @classmethod
-    def get(cls, name: str) -> "CaptureProfile":
+    def get(cls, name: str) -> CaptureProfile:
         """Load a built-in profile by name."""
         key = name.lower()
         if key not in BUILTIN_PROFILES:
@@ -512,7 +513,7 @@ class CaptureProfile:
 
     @classmethod
     def custom(cls, base: str = "phone_normal", overrides: Mapping[str, Any] | None = None
-               ) -> "CaptureProfile":
+               ) -> CaptureProfile:
         """Start from a built-in profile and deep-merge overrides onto it."""
         profile = cls.get(base)
         if overrides:
@@ -522,7 +523,7 @@ class CaptureProfile:
         return profile
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "CaptureProfile":
+    def from_dict(cls, data: Mapping[str, Any]) -> CaptureProfile:
         merged = deep_merge(default_profile_dict(), dict(data))
         profile = cls(merged)
         profile.validate()

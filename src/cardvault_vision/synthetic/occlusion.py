@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .imaging import (
-    blend_modes,
     convolve,
     fbm,
     gaussian_kernel,

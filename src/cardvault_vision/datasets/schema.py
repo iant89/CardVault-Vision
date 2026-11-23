@@ -20,8 +20,10 @@ Coordinate conventions
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, fields as dataclass_fields
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
+from typing import Any
 
 from ..version import SCHEMA_VERSION
 
@@ -124,7 +126,7 @@ class BBox:
     def center(self) -> tuple[float, float]:
         return (self.x0 + self.x1) / 2, (self.y0 + self.y1) / 2
 
-    def clip(self, width: int, height: int) -> "BBox":
+    def clip(self, width: int, height: int) -> BBox:
         """Clamp to the image extent; may collapse to a zero-area box."""
         return BBox(
             min(max(self.x0, 0.0), width),
@@ -133,22 +135,22 @@ class BBox:
             min(max(self.y1, 0.0), height),
         )
 
-    def expand(self, px: float) -> "BBox":
+    def expand(self, px: float) -> BBox:
         return BBox(self.x0 - px, self.y0 - px, self.x1 + px, self.y1 + px)
 
-    def iou(self, other: "BBox") -> float:
+    def iou(self, other: BBox) -> float:
         ix0, iy0 = max(self.x0, other.x0), max(self.y0, other.y0)
         ix1, iy1 = min(self.x1, other.x1), min(self.y1, other.y1)
         inter = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
         union = self.area + other.area - inter
         return inter / union if union > 0 else 0.0
 
-    def intersection_area(self, other: "BBox") -> float:
+    def intersection_area(self, other: BBox) -> float:
         ix0, iy0 = max(self.x0, other.x0), max(self.y0, other.y0)
         ix1, iy1 = min(self.x1, other.x1), min(self.y1, other.y1)
         return max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
 
-    def relative_to(self, parent: "BBox") -> "BBox":
+    def relative_to(self, parent: BBox) -> BBox:
         """Express this box in normalised coordinates of ``parent``."""
         if parent.width <= 0 or parent.height <= 0:
             raise ValueError("Cannot normalise against an empty parent box")
@@ -171,13 +173,13 @@ class BBox:
                 "x1": round(float(self.x1), 2), "y1": round(float(self.y1), 2)}
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "BBox":
+    def from_dict(cls, data: Mapping[str, Any]) -> BBox:
         if isinstance(data, (list, tuple)) and len(data) == 4:
             return cls(*(float(v) for v in data))
         return cls(float(data["x0"]), float(data["y0"]), float(data["x1"]), float(data["y1"]))
 
     @classmethod
-    def from_xywh(cls, x: float, y: float, w: float, h: float) -> "BBox":
+    def from_xywh(cls, x: float, y: float, w: float, h: float) -> BBox:
         return cls(x, y, x + w, y + h)
 
 
@@ -234,7 +236,7 @@ class Quad:
                 signs.append(cross > 0)
         return len(set(signs)) == 1
 
-    def translate(self, dx: float, dy: float) -> "Quad":
+    def translate(self, dx: float, dy: float) -> Quad:
         return Quad(tuple((x + dx, y + dy) for x, y in self.points))
 
     def clip_inside(self, width: int, height: int) -> bool:
@@ -248,17 +250,17 @@ class Quad:
         return {"points": self.as_list()}
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | Iterable) -> "Quad":
+    def from_dict(cls, data: Mapping[str, Any] | Iterable) -> Quad:
         pts = data["points"] if isinstance(data, Mapping) else list(data)
         return cls(tuple((float(p[0]), float(p[1])) for p in pts))
 
     @classmethod
-    def from_bbox(cls, bbox: BBox) -> "Quad":
+    def from_bbox(cls, bbox: BBox) -> Quad:
         return cls(((bbox.x0, bbox.y0), (bbox.x1, bbox.y0),
                     (bbox.x1, bbox.y1), (bbox.x0, bbox.y1)))
 
     @classmethod
-    def full_image(cls, width: int, height: int) -> "Quad":
+    def full_image(cls, width: int, height: int) -> Quad:
         return cls(((0.0, 0.0), (float(width), 0.0), (float(width), float(height)),
                     (0.0, float(height))))
 
@@ -347,7 +349,7 @@ class FieldAnnotation:
         return out
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "FieldAnnotation":
+    def from_dict(cls, data: Mapping[str, Any]) -> FieldAnnotation:
         return cls(
             text=str(data.get("text", "")),
             bbox=BBox.from_dict(data["bbox"]),
@@ -387,7 +389,7 @@ class CardKnowledge:
         return {k: v for k, v in out.items() if v is not None}
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "CardKnowledge":
+    def from_dict(cls, data: Mapping[str, Any]) -> CardKnowledge:
         known = {f.name for f in dataclass_fields(cls)}
         kwargs = {k: v for k, v in data.items() if k in known}
         if "card_type" in kwargs:
@@ -445,7 +447,7 @@ class Annotation:
         return out
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Annotation":
+    def from_dict(cls, data: Mapping[str, Any]) -> Annotation:
         return cls(
             image_id=str(data["image_id"]),
             card_id=str(data["card_id"]),
@@ -497,7 +499,7 @@ class SampleRecord:
         return out
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "SampleRecord":
+    def from_dict(cls, data: Mapping[str, Any]) -> SampleRecord:
         ann = data.get("annotation")
         annotation = Annotation.from_dict(ann) if ann else Annotation(
             image_id=data["image_id"],

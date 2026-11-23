@@ -9,12 +9,16 @@ from ..console import format_table, heading, kv_block, subheading
 from ..datasets import DatasetLoader, DatasetManifest
 from ..errors import ConfigError
 from ..logging_utils import get_logger
-from ..models import MODEL_REGISTRY, describe_models
+from ..models import MODEL_REGISTRY
 from ..synthetic.text import number_charset, universal_charset
-from .util import add_common_config_args, emit, resolve_manifest
+from .util import emit, resolve_manifest
 
 _LOG = get_logger("cli.train")
 
+#: Preferred field per OCR task, but only a *preference*: _resolve_ocr_field
+#: falls back to the other title/number fields that the dataset actually has.
+#: Hardcoding "name" made name-ocr train on 55 of 700 mixed cards, because the
+#: sports layouts put the title in "player".
 TASKS = {"name-ocr": "name", "number-ocr": "number", "card-classifier": None}
 
 
@@ -110,16 +114,14 @@ def _task_key(task: str) -> str:
 def cmd_train(args: argparse.Namespace) -> int:
     from ..training.trainer import TrainConfig, train_classifier, train_ocr
 
-    from ..config import Config
-
     manifest = DatasetManifest.load(resolve_manifest(args.dataset))
     task_key = _task_key(args.task)
     architecture = args.architecture or next(iter(MODEL_REGISTRY[task_key]))
     out_dir = Path(args.out or f"experiments/{args.task}")
 
-    field = args.field or TASKS.get(task_key)
+    field = args.field
     if task_key != "card-classifier":
-        field = field or ("name" if task_key == "name-ocr" else "number")
+        field = field or _resolve_ocr_field(manifest, task_key)
         charset = universal_charset() if task_key == "name-ocr" else number_charset()
     else:
         charset = ""
@@ -240,6 +242,63 @@ def _load_split(manifest: DatasetManifest, train_split: str, val_split: str,
     return loader, val_loader
 
 
+def _resolve_ocr_field(manifest, task_key: str) -> str:
+    """Pick the text field the split actually has.
+
+    ``name-ocr`` used to hardcode ``"name"``. Sports layouts label that box
+    ``player`` and some layouts use ``title``, so on a mixed dataset the
+    trainer silently skipped 92% of the cards (645 of 685 here) and then
+    "failed" to learn from the handful that were left. Prefer the canonical
+    name, but fall back to whichever title field is most common and say so.
+    """
+    from ..datasets.schema import NUMBER_FIELDS, TITLE_FIELDS
+
+    wanted = TITLE_FIELDS if task_key == "name-ocr" else NUMBER_FIELDS
+    preferred = TASKS.get(task_key)
+    counts = {name: 0 for name in wanted}
+    for sample in manifest.samples:
+        fields = sample.annotation.fields
+        for name in wanted:
+            if name in fields and fields[name].text.strip():
+                counts[name] += 1
+    total = len(manifest.samples)
+    # Only consider fields that appear in *every* split, otherwise a field can
+    # cover the training data and still leave validation empty - which surfaced
+    # as "No usable training samples for field 'player'" from the validation
+    # loader rather than as an explanation.
+    splits = sorted({sample.split for sample in manifest.samples if sample.split})
+    per_split = {name: {split: 0 for split in splits} for name in wanted}
+    for sample in manifest.samples:
+        fields = sample.annotation.fields
+        for name in wanted:
+            if name in fields and fields[name].text.strip() and sample.split:
+                per_split[name][sample.split] += 1
+    universal = [name for name in wanted if counts[name] and
+                 all(per_split[name][split] for split in splits)] or list(wanted)
+    best = max(universal, key=lambda name: counts[name])
+    # Keep the canonical field when it is *usable*; only fall back to another
+    # layout's field when the canonical one would throw away most of the split.
+    # Both must be present in every split (checked above).
+    if preferred in universal and counts[preferred] >= 0.5 * max(counts[best], 1):
+        best = preferred
+    if not counts[best]:
+        raise ConfigError(
+            f"No samples carry any of the fields {list(wanted)}; cannot train "
+            f"{task_key} on {manifest.name}"
+        )
+    coverage = counts[best] / max(total, 1)
+    if coverage < 0.9:
+        _LOG.warning(
+            "Using field %r for %s: only %d/%d samples (%.0f%%) have it (%s). "
+            "Pass --field to override.", best, task_key, counts[best], total,
+            coverage * 100, ", ".join(f"{k}={v}" for k, v in counts.items() if v),
+        )
+    else:
+        _LOG.info("Using field %r for %s (%d/%d samples)", best, task_key,
+                  counts[best], total)
+    return best
+
+
 def _or_train(val_samples, train_samples):
     """``val_samples`` unless it is empty, without assuming truthiness.
 
@@ -314,7 +373,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
                          device=args.device, seed=args.seed, patience=0)
     train_samples, val_samples = _load_split(manifest, "train", "val", args.max_train,
                                              args.max_val, config)
-    field = "name" if task_key == "name-ocr" else "number"
+    field = _resolve_ocr_field(manifest, task_key)
     charset = universal_charset() if task_key == "name-ocr" else number_charset()
 
     results = {}

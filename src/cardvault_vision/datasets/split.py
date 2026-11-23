@@ -19,12 +19,12 @@ the list order).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
 
 from ..errors import ConfigError, DatasetError
 from ..logging_utils import get_logger
-from ..rng import derive_seed, rng_for, stable_permutation
+from ..rng import derive_seed, stable_permutation
 from .hashing import find_duplicate_groups
 from .manifest import DatasetManifest
 from .schema import SampleRecord
@@ -84,7 +84,7 @@ class SplitPlan:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping) -> "SplitPlan":
+    def from_dict(cls, data: Mapping) -> SplitPlan:
         return cls(
             assignments=dict(data.get("assignments") or {}),
             ratios=dict(data.get("ratios") or {}),
@@ -101,7 +101,7 @@ def _normalise_ratios(train: float, val: float, test: float) -> dict[str, float]
     if total <= 0:
         raise ConfigError("At least one split ratio must be positive")
     ratios = {name: value / total for name, value in
-              zip(SPLIT_NAMES, (train, val, test))}
+              zip(SPLIT_NAMES, (train, val, test), strict=True)}
     return ratios
 
 
@@ -175,37 +175,29 @@ def split_dataset(
             return knowledge.knowledge.finish or "UNKNOWN"
         return "ALL"
 
+    assignments: dict[str, str] = {}
+    warnings: list[str] = []
     if strategy == "stratified":
         buckets: dict[str, list[list[str]]] = defaultdict(list)
         for group in groups:
             buckets[card_type(group)].append(group)
-        ordered: list[list[str]] = []
-        # Interleave strata so proportional allocation stays balanced even
-        # when one stratum is small.
-        ordered.extend(_interleave([stable_permutation(g, seed) for g in buckets.values()]))
+        # Allocate *within* each stratum. Drawing one global sequence and slicing
+        # it into a prefix per split put whole strata in one split: a 4:1
+        # train/val split of a mixed dataset sent every sports card to train and
+        # left val holding only two TCG types. A field that only exists on sports
+        # cards then had no validation samples at all, and training failed with
+        # "No usable training samples for field 'player'" - a confusing symptom
+        # for what was really a broken split.
+        for stratum, members in sorted(buckets.items()):
+            # ``members`` is already a list of *groups*; shuffling and
+            # interleaving it again treats each group as a stratum of its own
+            # and hands _allocate bare card-id strings.
+            assignments.update(
+                _allocate(stable_permutation(members, seed), ratios,
+                          warning_prefix=stratum, warnings=warnings)
+            )
     else:
-        ordered = list(groups)
-
-    # -- allocation -------------------------------------------------------
-    counts = _assign_counts(len(cards), ratios)
-    assignments: dict[str, str] = {}
-    warnings: list[str] = []
-    cursor = 0
-    for name in SPLIT_NAMES:
-        target_cards = counts[name]
-        assigned = 0
-        while cursor < len(ordered) and assigned < target_cards:
-            group = ordered[cursor]
-            cursor += 1
-            for card in group:
-                assignments[card] = name
-            assigned += len(group)
-        if target_cards and assigned == 0:
-            warnings.append(f"Split {name!r} requested {target_cards} card(s) but received none")
-    # Any leftovers (group granularity overshoot) go to train.
-    for group in ordered[cursor:]:
-        for card in group:
-            assignments[card] = "train"
+        assignments.update(_allocate(list(groups), ratios, warnings=warnings))
 
     if min_cards_per_split:
         actual = SplitPlan(assignments=assignments).counts()
@@ -222,6 +214,55 @@ def split_dataset(
     for warning in warnings:
         _LOG.warning(warning)
     return plan
+
+
+def _allocate(
+    ordered: Sequence[Sequence[str]],
+    ratios: Mapping[str, float],
+    *,
+    warning_prefix: str = "",
+    warnings: list[str] | None = None,
+) -> dict[str, str]:
+    """Assign ordered card groups to splits, proportionally and completely.
+
+    Groups are atomic, so a group larger than its split's share can overshoot;
+    the next split then receives fewer. Every split that is entitled to cards
+    gets at least one *group*, and the remainder -- including the final split --
+    flows into ``train`` so no card is ever dropped.
+    """
+    warnings = warnings if warnings is not None else []
+    total_groups = len(ordered)
+    # Target by *card* count, not group count: groups are atomic, so counting
+    # groups leaves splits one group short and the shortfall shows up as cards
+    # with no split at all.
+    target = _assign_counts(sum(len(group) for group in ordered), ratios)
+    assignments: dict[str, str] = {}
+    cursor = 0
+    # ``train`` is consumed last so it can absorb the remainder; the small
+    # splits are filled first. Filling train first starved val/test, and filling
+    # test last dropped cards entirely because train had already taken them.
+    order = [name for name in SPLIT_NAMES if name != "train"] + ["train"]
+    for position, name in enumerate(order):
+        wanted = target[name]
+        if wanted <= 0:
+            continue
+        last = position == len(order) - 1
+        assigned = 0
+        while cursor < total_groups and (last or assigned < wanted):
+            group = ordered[cursor]
+            cursor += 1
+            for card in group:
+                assignments[card] = name
+            assigned += len(group)
+        if assigned == 0:
+            label = f"{warning_prefix}: " if warning_prefix else ""
+            warnings.append(f"{label}split {name!r} requested {wanted} card(s) "
+                            f"but received none")
+    # Leftovers go to train, never nowhere.
+    for group in ordered[cursor:]:
+        for card in group:
+            assignments[card] = "train"
+    return assignments
 
 
 def _interleave(sequences: list[list]) -> list:

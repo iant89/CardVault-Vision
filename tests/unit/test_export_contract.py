@@ -10,16 +10,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 
 from cardvault_vision.export.onnx_export import (
+    ExportError,
     ExportSpec,
     contract_spec,
     preprocessing_spec,
 )
-
 
 CHARSET = "ABCDEFGHIJabcdefghij0123456789 .-"
 
@@ -49,21 +48,21 @@ class TestExportSpec:
         assert spec.num_classes == 3
 
     def test_ocr_requires_a_charset(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ExportError, match="charset"):
             ExportSpec(task="name-ocr", version="1.0.0", architecture="crnn", charset="")
 
     def test_classifier_requires_class_names(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ExportError, match="class_names"):
             ExportSpec(task="card-classifier", version="1.0.0",
                        architecture="card-type-cnn", class_names=[])
 
     def test_version_must_be_safe_as_a_directory_name(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ExportError, match="version"):
             ExportSpec(task="name-ocr", version="../escape", architecture="crnn",
                        charset=CHARSET)
 
     def test_unknown_task_is_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ExportError, match="Unknown task"):
             ExportSpec(task="not-a-task", version="1.0.0", architecture="crnn",
                        charset=CHARSET)
 

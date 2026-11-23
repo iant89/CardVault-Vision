@@ -19,10 +19,12 @@ import copy
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .errors import ConfigError
+
 
 def _find_repo_root(start: Path) -> Path:
     """Locate the repository root from this module's location.
@@ -151,7 +153,7 @@ class Config:
         defaults: Mapping[str, Any] | None = None,
         overrides: Mapping[str, Any] | None = None,
         sets: list[str] | None = None,
-    ) -> "Config":
+    ) -> Config:
         """Build a config from defaults, YAML files, dict overrides and ``k=v`` sets."""
         merged: dict = copy.deepcopy(dict(defaults or {}))
         used: list[str] = []
@@ -181,7 +183,7 @@ class Config:
             raise ConfigError(f"Missing required configuration key: {dotted}")
         return value
 
-    def set(self, dotted: str, value: Any) -> "Config":
+    def set(self, dotted: str, value: Any) -> Config:
         set_dotted(self._data, dotted, value)
         return self
 

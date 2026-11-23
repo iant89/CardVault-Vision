@@ -116,7 +116,7 @@ class ReproRecord:
         config: Any = None,
         source: Any = None,
         **extra: Any,
-    ) -> "ReproRecord":
+    ) -> ReproRecord:
         return cls(
             seed=normalize_seed(seed),
             config_fingerprint=fingerprint(config) if config is not None else None,

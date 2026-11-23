@@ -20,11 +20,9 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
-
-import numpy as np
 
 from ..errors import ConfigError, NotTrainedError
 from ..logging_utils import RunRecorder, get_logger

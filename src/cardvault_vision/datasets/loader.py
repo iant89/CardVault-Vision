@@ -12,10 +12,10 @@ captures on load — useful for inspection tooling and for OCR training where a
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator, Sequence
 
 import numpy as np
 

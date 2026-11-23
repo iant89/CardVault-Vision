@@ -6,13 +6,12 @@ import argparse
 import platform
 import shutil
 import sys
-from pathlib import Path
 
 from ..console import format_table, heading, kv_block, subheading
 from ..layouts import available_layouts, load_layouts, validate_layouts
 from ..reproducibility import git_commit
 from ..version import SCHEMA_VERSION, __version__
-from .util import add_common_config_args, emit
+from .util import emit
 
 
 def register(sub: argparse._SubParsersAction) -> None:
@@ -39,7 +38,6 @@ def _module_version(name: str) -> str | None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    from ..config import REPO_ROOT
     from ..hardware import detect_hardware
 
     hardware = detect_hardware()

@@ -33,13 +33,11 @@ Torch/ONNX are optional; exporting raises a precise error with an install hint.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from ..errors import ExportError
 from ..logging_utils import get_logger

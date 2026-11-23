@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..errors import ExportError, MissingDependencyError
+from ..errors import MissingDependencyError
 from ..logging_utils import get_logger
 
 _LOG = get_logger("export.validate")

@@ -9,9 +9,9 @@ where that is appropriate (CI, dataset freeze).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping
 
 import numpy as np
 
@@ -69,7 +69,7 @@ class ValidationReport:
             path: str | None = None) -> None:
         self.issues.append(ImageIssue(image_id, code, message, severity, path))
 
-    def extend(self, other: "ValidationReport") -> None:
+    def extend(self, other: ValidationReport) -> None:
         self.issues.extend(other.issues)
         self.checked += other.checked
         self.ok += other.ok
@@ -215,6 +215,7 @@ def validate_annotation(
     min_field_size: float = 2.0,
     min_card_visibility: float = 0.25,
     strict_fields: bool = True,
+    min_text_height: float = 0.0,
 ) -> ValidationReport:
     """Check that an annotation is internally consistent.
 
@@ -224,7 +225,8 @@ def validate_annotation(
     * a field box extending outside the image;
     * a card boundary that is self-intersecting or mostly outside the frame;
     * empty text where text is required;
-    * unknown card type / unknown field names.
+    * unknown card type / unknown field names;
+    * text boxes too short to be legible (``min_text_height``).
     """
     report = ValidationReport(checked=1)
     image_id = annotation.image_id
@@ -270,6 +272,24 @@ def validate_annotation(
         if not box.is_valid(min_field_size):
             report.add(image_id, "tiny_field_box",
                        f"Field {name!r} box is {box.width:.1f}x{box.height:.1f}px")
+        # Legibility floor. A name rendered ~10 px tall carries no glyph detail
+        # once the OCR head resizes the crop to its 32 px input height, so the
+        # dataset looks fine (boxes are valid, text is right) while CTC has
+        # nothing to learn from and collapses to a constant prediction. That
+        # cost a full afternoon of "why is CER exactly 1.0", so it is checked
+        # rather than assumed. render_scale is the knob: at 0.5 the sport and
+        # Yu-Gi-Oh layouts landed at ~19 px, at 1.0 they land at ~92 px.
+        # Only title fields gate OCR training: a name ~10 px tall has no glyph
+        # detail left after the head resizes to its 32 px input, so the dataset
+        # looks fine (boxes valid, text correct) while CTC has nothing to learn
+        # and collapses to a constant prediction - which is exactly how CER sat
+        # at 1.0 for 30 epochs. Small number/year fields are normal even on a
+        # good dataset, so they do not count.
+        if min_text_height and name in TITLE_FIELDS and box.height < min_text_height:
+            report.add(image_id, "illegible_text",
+                       f"Title field {name!r} is {box.height:.1f}px tall "
+                       f"(min {min_text_height:g}px for OCR training); "
+                       f"raise the synthetic render scale", severity="warning")
         if box.x1 <= 0 or box.y1 <= 0 or box.x0 >= annotation.width or box.y0 >= annotation.height:
             report.add(image_id, "field_outside_image",
                        f"Field {name!r} lies entirely outside the frame")
@@ -303,6 +323,7 @@ def validate_dataset(
     min_card_visibility: float = 0.25,
     max_perceptual_distance: int = 4,
     sample_limit: int | None = None,
+    min_text_height: float = 0.0,
 ) -> ValidationReport:
     """Full dataset validation, returning an aggregated report.
 
@@ -340,6 +361,7 @@ def validate_dataset(
                     record.annotation,
                     require_card_quad=require_card_quad,
                     min_card_visibility=min_card_visibility,
+                    min_text_height=min_text_height,
                 )
             )
         else:

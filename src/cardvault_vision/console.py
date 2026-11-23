@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import shutil
 import sys
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 
 def terminal_width(default: int = 100) -> int:
@@ -46,7 +46,7 @@ def format_table(headers: Sequence[str], rows: Sequence[Sequence[object]],
         widest = widths.index(max(widths))
         widths[widest] -= 1
     def render(row: Sequence[str]) -> str:
-        return "  ".join(f"{c[:w]:<{w}}" for c, w in zip(row, widths)).rstrip()
+        return "  ".join(f"{c[:w]:<{w}}" for c, w in zip(row, widths, strict=True)).rstrip()
     lines = [render(headers), "  ".join("-" * w for w in widths)]
     lines.extend(render(row) for row in cells)
     return "\n".join("  " + line for line in lines)

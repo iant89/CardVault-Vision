@@ -28,12 +28,16 @@ def require_torch(feature: str) -> None:
         raise MissingDependencyError(feature, "torch", "train") from exc
 
 
+# ruff: noqa: E402
+# The model modules below are imported after require_torch so that importing
+# this package stays torch-free until a model is actually built. The deferred
+# imports are the point of this module, not an oversight.
 from .classifier import ClassifierConfig, build_classifier  # noqa: E402
 from .ocr import (
     CRNN,
-    OCRModelConfig,
-    LightweightTransformerOCR,
     OCR_ARCHITECTURES,
+    LightweightTransformerOCR,
+    OCRModelConfig,
     TemporalConvOCR,
     build_ocr,
 )  # noqa: E402

@@ -28,25 +28,25 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
 
 import numpy as np
 
 from ..config import fingerprint
-from ..datasets.hashing import bytes_sha256, file_sha256
+from ..datasets.hashing import file_sha256
 from ..datasets.manifest import DatasetManifest, DatasetVersion
 from ..datasets.schema import CardKnowledge, SampleRecord
 from ..errors import ConfigError, GenerationError
 from ..logging_utils import RunRecorder, get_logger
 from ..reproducibility import ReproRecord, write_json
-from ..rng import RngStreams, derive_seed, normalize_seed, rng_for, sample_indices
+from ..rng import RngStreams, normalize_seed, rng_for, sample_indices
 from ..version import SCHEMA_VERSION
 from .generator import (
-    GenerationConfig,
     GeneratedSample,
+    GenerationConfig,
     SourceCard,
     _UnusableSample,
     generate_sample,
@@ -724,7 +724,6 @@ def _worker_generate(index: int, seed: int, config_dict: dict, *,
     """Worker entry point (module-level so it is picklable)."""
     global _WORKER_POOL, _WORKER_POOL_KEY
 
-    from ..config import Config
 
     # Key the cache on the source. A process pool created with "spawn" inherits
     # the parent's module state, so a worker that reused an unconditionally

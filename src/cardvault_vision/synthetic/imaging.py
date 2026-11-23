@@ -129,7 +129,7 @@ def homography_from_corners(
     src = np.asarray(src, dtype=np.float64).reshape(4, 2)
     dst = np.asarray(dst, dtype=np.float64).reshape(4, 2)
     rows = []
-    for (x, y), (u, v) in zip(src, dst):
+    for (x, y), (u, v) in zip(src, dst, strict=True):
         rows.append([-x, -y, -1, 0, 0, 0, u * x, u * y, u])
         rows.append([0, 0, 0, -x, -y, -1, v * x, v * y, v])
     A = np.array(rows, dtype=np.float64)

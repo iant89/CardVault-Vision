@@ -17,7 +17,7 @@ from ..datasets import (
 from ..errors import DatasetError
 from ..logging_utils import get_logger, timed
 from ..reproducibility import write_json
-from .util import add_common_config_args, emit, print_json, resolve_manifest, rows_from_counts
+from .util import add_common_config_args, emit, resolve_manifest, rows_from_counts
 
 _LOG = get_logger("cli.dataset")
 
@@ -266,9 +266,9 @@ def cmd_split(args: argparse.Namespace) -> int:
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    from ..datasets.schema import Annotation, CardKnowledge, SampleRecord
     from ..datasets.hashing import file_sha256
     from ..datasets.loader import IMAGE_SUFFIXES, load_image
+    from ..datasets.schema import Annotation, CardKnowledge, SampleRecord
     from ..datasets.validation import validate_image
 
     images_dir = Path(args.images)
@@ -355,7 +355,7 @@ def bootstrap_source_dataset(
     from PIL import Image
 
     from ..datasets.hashing import file_sha256
-    from ..datasets.schema import Annotation, CardKnowledge, FieldAnnotation, BBox, SampleRecord
+    from ..datasets.schema import Annotation, BBox, CardKnowledge, FieldAnnotation, SampleRecord
     from ..demo import random_card_type, random_fields
     from ..synthetic.text import synth_card_image
 

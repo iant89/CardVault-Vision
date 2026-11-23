@@ -11,7 +11,7 @@ from ..benchmarking import (
     benchmark_synthetic_engine,
     write_benchmark,
 )
-from ..console import format_table, heading, kv_block, subheading
+from ..console import format_table, heading, subheading
 from ..errors import ConfigError
 from ..logging_utils import get_logger
 from .util import emit

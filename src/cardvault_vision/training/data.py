@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Callable, Iterator, Sequence
 
 import numpy as np
 
@@ -245,7 +245,6 @@ class OCRDataset:
         max_width: int = 1600,
     ) -> None:
         require_torch("OCR training")
-        import torch
         from torch.utils.data import Dataset
 
         from ..synthetic.text import encode_text, normalize_text

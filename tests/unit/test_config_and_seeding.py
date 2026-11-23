@@ -6,10 +6,10 @@ import json
 
 import pytest
 
+from cardvault_vision import hardware
 from cardvault_vision.config import Config, deep_merge, parse_value, resolve_config_path
 from cardvault_vision.errors import ConfigError
 from cardvault_vision.rng import MAX_SEED, RngStreams, normalize_seed
-from cardvault_vision import hardware
 
 
 class TestConfigLayering:
@@ -133,7 +133,7 @@ class TestHardware:
         """A requested GPU must never degrade to CPU without telling the caller."""
         if hardware.detect_hardware().cuda_available:
             pytest.skip("CUDA present")
-        with pytest.raises(Exception):
+        with pytest.raises(ConfigError, match="CUDA"):
             hardware.resolve_device("cuda")
 
     def test_info_is_json_serialisable(self):

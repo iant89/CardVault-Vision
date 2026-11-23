@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .background import BackgroundResult, add_ambient_light_pool
-from .imaging import alpha_composite, resize, screen_blend, vignette
+from .imaging import resize, screen_blend, vignette
 from .lighting import ShadowResult, apply_shadow
 from .occlusion import Occluder
 

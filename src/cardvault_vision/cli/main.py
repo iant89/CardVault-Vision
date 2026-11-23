@@ -14,13 +14,20 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import Callable
+from collections.abc import Callable
 
 from ..errors import CardVaultVisionError, MissingDependencyError
 from ..logging_utils import setup_logging
 from ..version import __version__
-from . import commands_benchmark, commands_dataset, commands_export, commands_eval
-from . import commands_models, commands_synthetic, commands_system
+from . import (
+    commands_benchmark,
+    commands_dataset,
+    commands_eval,
+    commands_export,
+    commands_models,
+    commands_synthetic,
+    commands_system,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

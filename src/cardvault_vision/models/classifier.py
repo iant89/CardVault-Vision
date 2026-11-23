@@ -13,12 +13,11 @@ rather than assumed (see :mod:`cardvault_vision.benchmarking`).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from ..datasets.schema import CARD_TYPES
 from ..errors import ConfigError
-from . import require_torch
 from .ocr import _torch
 
 

@@ -31,7 +31,7 @@ from ..errors import GenerationError
 from ..logging_utils import get_logger
 from ..rng import RngStreams
 from .artifacts import apply_artifacts, field_legibility, measure_quality
-from .background import BackgroundResult, generate_background
+from .background import generate_background
 from .camera import (
     RESOLUTION_PROFILES,
     apply_encoding,
@@ -60,7 +60,7 @@ from .materials import (
     glare_from_environment,
 )
 from .occlusion import occlusion_coverage, sample_occluders
-from .render import SceneLayers, card_alpha_mask, downscale_scene, render_scene
+from .render import SceneLayers, render_scene
 from .text import draw_card_text
 
 _LOG = get_logger("synthetic.generator")

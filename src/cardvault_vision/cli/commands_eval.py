@@ -115,11 +115,10 @@ def _kept_probabilities(probabilities, best, *, blank: int = 1, pad: int = 0):
 
 
 def _test_ocr(args, model, checkpoint, samples, manifest, task_key: str) -> int:
-    import numpy as np
     import torch
 
-    from ..training.data import OCRLineTransform
     from ..synthetic.text import decode_indices, normalize_text
+    from ..training.data import OCRLineTransform
 
     charset = checkpoint.get("charset") or (
         universal_charset() if task_key == "name-ocr" else number_charset())

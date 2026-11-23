@@ -8,7 +8,7 @@ data).
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from ..models import require_torch
 
@@ -61,7 +61,6 @@ def ctc_loss_from_widths(logits, widths, targets, target_lengths, *, model=None,
     padding-aware length derivation explicit instead of assuming the model emits
     one step per pixel.
     """
-    import torch
 
     if model is not None and hasattr(model, "output_length"):
         lengths = [model.output_length(int(width)) for width in widths]
@@ -74,7 +73,7 @@ def ctc_loss_from_widths(logits, widths, targets, target_lengths, *, model=None,
         if hasattr(target_lengths, "tolist") else [int(v) for v in target_lengths]
     # CTC needs T >= target length (plus repeats); check before handing off so the
     # error names the actual numbers instead of surfacing a bare RuntimeError.
-    for index, (available, needed) in enumerate(zip(input_lengths, target_lengths)):
+    for index, (available, needed) in enumerate(zip(input_lengths, target_lengths, strict=True)):
         if available < needed:
             raise ValueError(
                 f"CTC cannot align sample {index}: the model produces {available} time "

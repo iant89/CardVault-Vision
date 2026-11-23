@@ -26,7 +26,6 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from ..errors import ExportError
 from ..logging_utils import get_logger
@@ -61,7 +60,7 @@ class ModelEntry:
         return {k: v for k, v in self.__dict__.items()}
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ModelEntry":
+    def from_dict(cls, data: dict) -> ModelEntry:
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 

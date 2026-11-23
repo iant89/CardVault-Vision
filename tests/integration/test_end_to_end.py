@@ -128,7 +128,9 @@ class TestTrainingToExport:
         assert production["version"] == "0.1.0"
 
         # Versions are immutable: re-registering the same version must fail.
-        with pytest.raises(Exception):
+        from cardvault_vision.export.onnx_export import ExportError
+
+        with pytest.raises(ExportError, match="already"):
             register_export(artifact, exports_root=exports)
 
         # --- the torch-free consumer contract ----------------------------
@@ -244,7 +246,6 @@ class TestGenerationResume:
         import pickle
 
         from cardvault_vision.synthetic import SyntheticConfig
-        from cardvault_vision.synthetic.pipeline import _worker_generate
 
         config = SyntheticConfig(profile="phone_normal", count=2, seed=7,
                                  render_scale=0.25, workers=2)

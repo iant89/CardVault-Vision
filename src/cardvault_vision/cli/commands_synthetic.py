@@ -12,12 +12,10 @@ from ..datasets import DatasetManifest, validate_dataset
 from ..errors import ConfigError
 from ..logging_utils import get_logger
 from ..synthetic import (
-    BUILTIN_PROFILES,
     MIX_PRESETS,
     PROBLEM_DESCRIPTIONS,
     PROBLEM_TYPES,
     CaptureProfile,
-    SourceCard,
     SyntheticConfig,
     audit_annotations,
     generate_dataset,
@@ -27,7 +25,7 @@ from ..synthetic import (
 )
 from ..synthetic.annotations import summarize_annotations
 from ..synthetic.profiles import PROFILE_NAMES
-from ..synthetic.targeting import parse_problem_spec, problems_for_targets
+from ..synthetic.targeting import problems_for_targets
 from .util import add_common_config_args, emit, print_json, resolve_manifest, rows_from_counts
 
 _LOG = get_logger("cli.synthetic")
@@ -217,9 +215,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
     if keep_dir:
         keep_dir.mkdir(parents=True, exist_ok=True)
 
-    from ..synthetic.generator import GenerationConfig
     from ..synthetic.pipeline import plan_sample
-    from ..synthetic.targeting import apply_problem
 
     config = SyntheticConfig(
         profile=args.profile, mode=args.mode, problems=problems,

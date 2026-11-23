@@ -6,7 +6,6 @@ still runs on a bare interpreter.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from cardvault_vision.models import MODEL_REGISTRY, describe_models

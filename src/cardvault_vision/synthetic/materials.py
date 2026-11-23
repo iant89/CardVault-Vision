@@ -37,15 +37,12 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .imaging import (
-    blend_modes,
-    fbm,
-    gaussian_kernel,
     convolve,
+    gaussian_kernel,
     linear_mask,
     radial_mask,
     scratch_texture,
     screen_blend,
-    soft_light,
     value_noise,
 )
 

@@ -12,10 +12,9 @@ data without touching the engine (see ``docs/architecture/layouts.md``).
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
-from typing import Iterable, Mapping
 
 from ..config import CONFIG_DIR, load_yaml
 from ..errors import ConfigError
@@ -106,7 +105,7 @@ class CardLayout:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping, *, source: str = "config") -> "CardLayout":
+    def from_dict(cls, data: Mapping, *, source: str = "config") -> CardLayout:
         fields = {}
         for name, spec in (data.get("fields") or {}).items():
             if isinstance(spec, Mapping):

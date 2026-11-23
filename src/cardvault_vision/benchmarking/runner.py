@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import statistics
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
 
 import numpy as np
 
@@ -60,7 +60,7 @@ class LatencyStats:
         }
 
     @classmethod
-    def from_samples(cls, samples_ms: Sequence[float], batch_size: int = 1) -> "LatencyStats":
+    def from_samples(cls, samples_ms: Sequence[float], batch_size: int = 1) -> LatencyStats:
         values = sorted(samples_ms)
         if not values:
             return cls(0, 0, 0, 0, 0, 0, 0, 0)
@@ -102,8 +102,9 @@ def measure_memory() -> dict:
     """Process RSS and CUDA allocated/reserved memory."""
     result: dict = {}
     try:
-        import psutil
         import os
+
+        import psutil
 
         process = psutil.Process(os.getpid())
         result["process_rss_mb"] = round(process.memory_info().rss / 1024**2, 1)
