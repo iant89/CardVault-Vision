@@ -244,9 +244,10 @@ def generate_sample(
     aspect_choice = float(streams.get("sample").choice([4 / 3, 3 / 4, 1.0, 16 / 9],
                                                        p=[0.6, 0.15, 0.15, 0.10]))
     frame_w = target_w
+    # max() already guarantees the floor, so no "if frame_h < 64" repair is
+    # needed (the one that used to be here referenced an undefined target_h and
+    # could only ever raise NameError).
     frame_h = max(64, int(round(frame_w / aspect_choice)))
-    if frame_h < 64:
-        frame_h = target_h
     # Cap the render size for sane latency on CPU.
     render_w, render_h = frame_w, frame_h
 

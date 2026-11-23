@@ -216,9 +216,12 @@ def benchmark_ocr_model(
         model.to(device).eval()
         tensor = torch.randn(batch_size, 1, input_height, input_width, device=device)
         sync = (lambda: torch.cuda.synchronize()) if device.startswith("cuda") else None
-        def call():
+        # ``tensor`` is bound as a default argument on purpose: a bare closure
+        # would read the *last* iteration's tensor, so benchmarking cpu then cuda
+        # measured the same input on the wrong device.
+        def call(_model=model, _tensor=tensor):
             with torch.no_grad():
-                return model(tensor)
+                return _model(_tensor)
         stats = measure_latency(call, warmup=3, iterations=iterations,
                                 batch_size=batch_size, sync=sync)
         key = "cpu" if device == "cpu" else "gpu"
@@ -248,9 +251,9 @@ def benchmark_classifier(
         model.to(device).eval()
         tensor = torch.randn(1, 3, input_size, input_size, device=device)
         sync = (lambda: torch.cuda.synchronize()) if device.startswith("cuda") else None
-        def call():
+        def call(_model=model, _tensor=tensor):
             with torch.no_grad():
-                return model(tensor)
+                return _model(_tensor)
         stats = measure_latency(call, warmup=3, iterations=iterations, sync=sync)
         result.latency["cpu" if device == "cpu" else "gpu"] = stats.to_dict()
     result.memory.update(measure_memory())

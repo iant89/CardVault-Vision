@@ -99,6 +99,62 @@ class DataLoaderConfig:
 # OCR line preparation
 # ---------------------------------------------------------------------------
 
+_MISSING = object()
+
+
+class _LazySamples(Sequence):
+    """A ``Sequence`` of loaded samples that keeps at most one image alive.
+
+    Callers pass a *loader* instead of a pre-materialised list. Each ``Sample``
+    owns its full-resolution image, so a 1418-sample split cost 1.4 GB of RAM
+    that the training step never used - it only ever needed the small prepared
+    crop, which totals about 3 MB. Two 178-card runs had already pushed peak RSS
+    to 2.7 GB of a 3 GB box, so anything larger died.
+
+    Access is sequential in practice (dataset construction and the validation
+    loop both walk the indices in order), so a single-slot cache turns a
+    per-sample load into a no-op for the common case without holding the corpus.
+    """
+
+    def __init__(self, loader) -> None:
+        self._loader = loader
+        self._index: dict[str, object] = {}
+        for position, record in enumerate(loader.records()):
+            self._index[record.image_id] = (position, record)
+        self._order = sorted(self._index.items(), key=lambda kv: kv[1][0])
+        self._cached_id: str | None = None
+        self._cached_sample = None
+
+    def __len__(self) -> int:
+        return len(self._order)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(len(self)))]
+        image_id, (_, record) = self._order[index]
+        if image_id != self._cached_id:
+            self._cached_sample = self._loader.load_record(record)
+            self._cached_id = image_id
+        return self._cached_sample
+
+    def __iter__(self):
+        for position in range(len(self)):
+            yield self[position]
+
+
+def _iter_samples(source) -> Iterator:
+    """Yield samples from a list or from a ``DatasetLoader``-like object."""
+    if isinstance(source, Sequence):
+        yield from source
+        return
+    if hasattr(source, "records"):
+        # Stream: one image is alive at a time.
+        for record in source.records():
+            yield source.load_record(record)
+        return
+    yield from source
+
+
 @dataclass
 class OCRLineTransform:
     """Turn a field crop into a fixed-height, variable-width tensor.
@@ -203,7 +259,10 @@ class OCRDataset:
         self.items: list[tuple[np.ndarray, list[int], str]] = []
         self.widths: list[int] = []
         skipped = 0
-        for sample in samples:
+        # ``samples`` may be a DatasetLoader: _iter_samples streams it so only
+        # one full image is resident at a time. The prepared crops are what we
+        # keep, and they are ~500x smaller.
+        for sample in _iter_samples(samples):
             annotation = sample.annotation.fields.get(field)
             if annotation is None or not annotation.text:
                 skipped += 1
@@ -298,7 +357,8 @@ class ClassifierDataset:
         items: list[tuple[np.ndarray, int]] = []
         skipped = 0
         rng = np.random.default_rng(0)
-        for sample in samples:
+        # Stream a loader rather than materialising the split (see _iter_samples).
+        for sample in _iter_samples(samples):
             label = self.index.get(sample.annotation.card_type)
             if label is None:
                 skipped += 1

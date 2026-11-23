@@ -148,20 +148,20 @@ def cmd_train(args: argparse.Namespace) -> int:
 
     train_samples, val_samples = _load_split(manifest, args.train_split, args.val_split,
                                              args.max_train, args.max_val, train_config)
-    if not train_samples:
+    if not len(train_samples):
         raise ConfigError(f"No '{args.train_split}' samples in {manifest.name}")
 
     if task_key == "card-classifier":
         class_names = overrides.get("class_names") or _observed_classes(train_samples)
         result = train_classifier(
-            train_samples, val_samples or train_samples, class_names=class_names,
+            train_samples, _or_train(val_samples, train_samples), class_names=class_names,
             config=train_config, out_dir=out_dir,
             channels=tuple(overrides.get("channels", (32, 64, 128, 192))),
             dropout=float(overrides.get("dropout", 0.2)),
         )
     else:
         result = train_ocr(
-            train_samples, val_samples or train_samples, field=field, charset=charset,
+            train_samples, _or_train(val_samples, train_samples), field=field, charset=charset,
             architecture=architecture, config=train_config, out_dir=out_dir,
             model_kwargs=overrides.get("model_kwargs") or {},
         )
@@ -228,20 +228,41 @@ def _load_split(manifest: DatasetManifest, train_split: str, val_split: str,
         _LOG.warning("Dataset has no splits; applied a card-level 80/20 split (seed=%d)",
                      config.seed)
 
+    # Hand the *loaders* over, not materialised lists. Each Sample owns its
+    # full-resolution image (~1 MB), so list() on a 1418-sample split burned
+    # 1.4 GB to produce crops that total 3 MB - enough to OOM a 3 GB box.
+    # OCRDataset/ClassifierDataset stream a loader via _iter_samples.
     loader = DatasetLoader(manifest, split=train_split,
                            max_side=None, limit=max_train)
-    train_samples = list(loader)
     val_loader = DatasetLoader(manifest, split=val_split, limit=max_val)
-    val_samples = list(val_loader)
-    if not val_samples and train_split != val_split:
+    if not len(val_loader) and train_split != val_split:
         _LOG.warning("Validation split %r is empty", val_split)
-    return train_samples, val_samples
+    return loader, val_loader
+
+
+def _or_train(val_samples, train_samples):
+    """``val_samples`` unless it is empty, without assuming truthiness.
+
+    ``DatasetLoader`` defines ``__len__`` but not ``__bool__``, and passing a
+    bare loader to ``x or y`` made every split look non-empty - an empty
+    validation set would have trained happily with no metrics at all.
+    """
+    return val_samples if len(val_samples) else train_samples
 
 
 def _observed_classes(samples) -> list[str]:
+    """Card types present in a split, read straight from the annotations.
+
+    Iterating a loader would decode every image just to read one string per
+    sample; ``records()`` gives the same information from the manifest.
+    """
     from ..datasets.schema import CARD_TYPES
 
-    observed = {sample.annotation.card_type for sample in samples}
+    if hasattr(samples, "records"):
+        types = [record.annotation.card_type for record in samples.records()]
+    else:
+        types = [sample.annotation.card_type for sample in samples]
+    observed = set(types)
     ordered = [name for name in CARD_TYPES if name in observed]
     ordered.extend(sorted(observed - set(ordered)))
     return ordered
@@ -303,7 +324,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         try:
             if task_key == "card-classifier":
                 result = train_classifier(
-                    train_samples, val_samples or train_samples,
+                    train_samples, _or_train(val_samples, train_samples),
                     class_names=_observed_classes(train_samples), config=config,
                     out_dir=Path(args.out) / architecture,
                 )
@@ -311,7 +332,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 metric_name = "macro_f1"
             else:
                 result = train_ocr(
-                    train_samples, val_samples or train_samples, field=field,
+                    train_samples, _or_train(val_samples, train_samples), field=field,
                     charset=charset, architecture=architecture, config=config,
                     out_dir=Path(args.out) / architecture,
                 )

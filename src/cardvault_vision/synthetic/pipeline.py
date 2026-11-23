@@ -318,9 +318,10 @@ def plan_sample(
             problems = [str(problem_rng.choice(config.problems))]
 
     # -- source card -------------------------------------------------------
-    other = None
-    if other_cards and stream.get("sample").random() < 0.5:
-        other = other_cards[int(stream.get("sample").integers(0, len(other_cards)))]
+    # NOTE: the occluder is *not* chosen here. SamplePlan carries no occluder
+    # field, so drawing one in this function only consumed RNG draws and threw
+    # the result away; the callers below derive it explicitly with
+    # rng_for(seed, "other_card", index) so serial and parallel agree.
     card = pool.choose(stream.get("source"))
 
     profile_data = apply_problem(profile.to_dict(), problems) if problems else profile.to_dict()
@@ -337,7 +338,6 @@ def plan_sample(
         jpeg_on_final=True,
         metadata={"source_card": card.card_id},
     )
-    suffix = f".{config.image_format}"
     image_id = f"{(problems[0] + '_') if problems else ''}{index:08d}"
     return SamplePlan(
         index=index,
@@ -651,7 +651,6 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
     """
     records: list[SampleRecord] = []
     payload = [(index, seed, config) for index in pending]
-    chunksize = max(1, min(16, len(payload) // (config.workers * 4) or 1))
     completed = 0
     with ProcessPoolExecutor(max_workers=config.workers) as executor:
         futures = {
@@ -665,7 +664,6 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
             for index, _, _ in payload
         }
         for future in as_completed(futures):
-            index = futures[future]
             try:
                 record_dict, rejection = future.result()
             except Exception as exc:  # pragma: no cover - worker crash
