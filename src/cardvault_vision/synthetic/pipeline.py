@@ -104,23 +104,23 @@ class SyntheticConfig:
     progress_every: int = 0
 
     def to_dict(self) -> dict:
-        return {
-            "profile": self.profile,
-            "mode": self.mode,
-            "problems": list(self.problems),
-            "problem_rate": self.problem_rate,
-            "count": self.count,
-            "seed": self.seed,
-            "render_scale": self.render_scale,
-            "min_visibility": self.min_visibility,
-            "min_legibility": self.min_legibility,
-            "image_format": self.image_format,
-            "jpeg_quality": self.jpeg_quality,
-            "workers": self.workers,
-            "shard": self.shard,
-            "num_shards": self.num_shards,
-            "overrides": self.overrides,
-        }
+        """Every field, not just the ones this class happens to use.
+
+        This dictionary is how a parallel worker reconstructs the config, and the
+        config is fingerprinted into every annotation. A partial dump silently
+        reverted unlisted fields (dataset name, retry budget, resume, version) to
+        their defaults in workers, which changed the fingerprint and therefore
+        produced different pixels for the same sample index.
+        """
+        out: dict = {}
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            if isinstance(value, list):
+                value = list(value)
+            elif isinstance(value, dict):
+                value = dict(value)
+            out[name] = value
+        return out
 
     def validate(self) -> None:
         if self.count < 0:
@@ -436,6 +436,12 @@ def generate_dataset(
         annotation_dir.mkdir(exist_ok=True)
 
     pool = source if isinstance(source, SourcePool) else load_source_pool(source)
+    # Workers reload the source themselves, which needs a concrete path rather
+    # than an in-memory pool. Recording it here (instead of relying on an
+    # environment variable nobody sets) is what makes a worker use the source the
+    # caller actually asked for rather than whatever a previous call cached.
+    source_path = source if isinstance(source, (str, Path)) else getattr(
+        source, "root", None)
     manifest_hash = None
     if isinstance(source, DatasetManifest):
         manifest_hash = source.version.content_hash or source.manifest_checksum()
@@ -457,9 +463,8 @@ def generate_dataset(
     for index in indices:
         plan = plan_sample(index=index, seed=seed, pool=pool, config=config,
                            profile_weights=profile_weights)
-        expected = image_dir / f"{plan.image_id}.{config.image_format}"
-        if config.resume and expected.exists() and _annotation_exists(
-                annotation_dir, plan.image_id, config):
+        if config.resume and _sample_written(image_dir, annotation_dir,
+                                             plan.image_id, config):
             skipped += 1
             continue
         pending.append(index)
@@ -500,6 +505,7 @@ def generate_dataset(
             pending=pending, seed=seed, pool=pool, config=config,
             profile_weights=profile_weights, out_dir=out_dir, report=report,
             handle=handle, progress=progress, total=total,
+            source_path=source_path, other_cards=other_cards,
         ))
     else:
         for index in pending:
@@ -507,6 +513,9 @@ def generate_dataset(
                                profile_weights=profile_weights)
             other = None
             if other_cards:
+                # Worker processes must repeat this derivation exactly (see
+                # _worker_generate); a sample rendered with a different occluder
+                # is a different sample, so the stream is named explicitly.
                 chooser = rng_for(seed, "other_card", index)
                 other = other_cards[int(chooser.integers(0, len(other_cards)))]
             record, rejected_reason = _attempt(plan, handle, config, other)
@@ -629,7 +638,10 @@ def _classify_rejection(quality: dict) -> str:
 
 
 def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir, report,
-                       handle, progress, total) -> list[SampleRecord]:
+                       handle, progress, total,
+                       source_path: str | Path | None = None,
+                       other_cards: list[np.ndarray] | None = None,
+                       ) -> list[SampleRecord]:
     """Generate in worker processes.
 
     Each worker gets the source pool once. Results are collected as *records*;
@@ -643,8 +655,11 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
     completed = 0
     with ProcessPoolExecutor(max_workers=config.workers) as executor:
         futures = {
-            executor.submit(_worker_generate, index, seed, config.to_dict(), out_dir=str(out_dir),
-                            profile_weights=profile_weights): index
+            executor.submit(_worker_generate, index, seed, config.to_dict(),
+                            out_dir=str(out_dir), profile_weights=profile_weights,
+                            source_path=None if source_path is None else str(source_path),
+                            other_cards=other_cards,
+                            ): index
             for index, _, _ in payload
         }
         for future in as_completed(futures):
@@ -673,30 +688,51 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
 
 
 _WORKER_POOL: SourcePool | None = None
-_WORKER_SOURCE: DatasetManifest | None = None
+_WORKER_POOL_KEY: str | None = None
 
 
 def _worker_generate(index: int, seed: int, config_dict: dict, *,
-                     out_dir: str, profile_weights: dict[str, float]):
+                     out_dir: str, profile_weights: dict[str, float],
+                     source_path: str | None = None,
+                     other_cards: list | None = None):
     """Worker entry point (module-level so it is picklable)."""
-    global _WORKER_POOL, _WORKER_SOURCE
+    global _WORKER_POOL, _WORKER_POOL_KEY
 
     from ..config import Config
 
-    if _WORKER_POOL is None:
-        source_path = os.environ.get("CVV_SOURCE_MANIFEST")
-        if not source_path:
-            raise GenerationError("Parallel generation requires CVV_SOURCE_MANIFEST")
-        _WORKER_POOL = load_source_pool(source_path)
+    # Key the cache on the source. A process pool created with "spawn" inherits
+    # the parent's module state, so a worker that reused an unconditionally
+    # cached pool would silently generate from the *previous* dataset's cards.
+    key = source_path or os.environ.get("CVV_SOURCE_MANIFEST") or "<in-memory>"
+    if _WORKER_POOL is None or _WORKER_POOL_KEY != key:
+        resolved = source_path or os.environ.get("CVV_SOURCE_MANIFEST")
+        if not resolved:
+            raise GenerationError(
+                "Parallel generation needs a source path; pass the source dataset "
+                "directory or manifest file rather than an in-memory pool."
+            )
+        _WORKER_POOL = load_source_pool(resolved)
+        _WORKER_POOL_KEY = key
 
     config = SyntheticConfig(**{**_clean_config_dict(config_dict)})
     plan = plan_sample(index=index, seed=seed, pool=_WORKER_POOL, config=config,
                        profile_weights=profile_weights)
     out_path = Path(out_dir)
 
-    def handle(working_plan: SamplePlan, other):
+    other = None
+    if other_cards:
+        # Same derivation as the in-process path: a sample rendered with a
+        # different occluding card is a different image, so serial and parallel
+        # runs must choose identically or the determinism guarantee breaks.
+        chooser = rng_for(seed, "other_card", index)
+        other = other_cards[int(chooser.integers(0, len(other_cards)))]
+
+    def handle(working_plan: SamplePlan, other_card):
+        # ``other_card`` may be a retry-adjusted plan's occluder; fall back to the
+        # one chosen above when the caller passes None.
         sample = generate_sample(working_plan.source_card, working_plan.config, seed=seed,
-                                 index=working_plan.index, image_id=working_plan.image_id)
+                                 index=working_plan.index, image_id=working_plan.image_id,
+                                 other_card=other_card if other_card is not None else other)
         relative = f"{IMAGE_DIR}/{working_plan.image_id}.{config.image_format}"
         image_hash = _write_image(out_path / relative, sample, config)
         if config.save_annotation_sidecars:
@@ -704,7 +740,7 @@ def _worker_generate(index: int, seed: int, config_dict: dict, *,
                        _annotation_payload(sample, config, None))
         return _build_sample_record(sample, image_path=relative, image_hash=image_hash)
 
-    record, reason = _attempt(plan, handle, config, None)
+    record, reason = _attempt(plan, handle, config, other)
     return (record.to_dict() if record is not None else None), reason
 
 
@@ -714,10 +750,24 @@ def _clean_config_dict(data: dict) -> dict:
     return {k: v for k, v in data.items() if k in known}
 
 
-def _annotation_exists(annotation_dir: Path, image_id: str, config: SyntheticConfig) -> bool:
-    if not config.save_annotation_sidecars:
-        return True
-    return (annotation_dir / f"{image_id}.json").exists()
+def _sample_written(image_dir: Path, annotation_dir: Path, image_id: str,
+                    config: SyntheticConfig) -> bool:
+    """Whether ``image_id`` was already written by an earlier run.
+
+    A sample accepted on a retry is stored as ``<image_id>_r<n>``, not as the
+    base id. Checking only the base id meant every resumed run regenerated every
+    retried sample: wasted work, and a slower run each time it was restarted.
+    """
+    candidates = [image_id] + [f"{image_id}_r{attempt}"
+                               for attempt in range(1, max(config.max_attempts, 1) + 1)]
+    for candidate in candidates:
+        if not (image_dir / f"{candidate}.{config.image_format}").exists():
+            continue
+        if not config.save_annotation_sidecars:
+            return True
+        if (annotation_dir / f"{candidate}.json").exists():
+            return True
+    return False
 
 
 def _load_existing_records(image_dir: Path, annotation_dir: Path,

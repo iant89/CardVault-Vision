@@ -171,3 +171,56 @@ def _consume_without_torch(artifact, metadata) -> None:
             text.append(labels[index - 2])
         previous = index
     assert isinstance("".join(text), str)
+
+
+class TestGenerationResume:
+    def test_rerunning_the_same_seed_regenerates_nothing(
+            self, source_dataset, tmp_path):
+        """Resume must be idempotent.
+
+        Samples accepted on a retry are stored as ``<id>_r<n>``. Checking only
+        the base id meant every restart regenerated all retried samples, so a
+        long run got slower each time it was interrupted.
+        """
+        from cardvault_vision.synthetic import SyntheticConfig
+        from cardvault_vision.synthetic.pipeline import generate_dataset
+
+        config = SyntheticConfig(profile="phone_normal", count=4, seed=42,
+                                 render_scale=0.25, min_visibility=0.0,
+                                 min_legibility=0.0)
+        out = tmp_path / "resume"
+        first = generate_dataset(source_dataset, config, output_dir=out)
+        assert first.generated > 0
+
+        second = generate_dataset(source_dataset, config, output_dir=out)
+        assert second.generated == 0
+        assert second.skipped == first.generated + first.skipped
+
+    def test_worker_count_does_not_change_the_output(self, source_dataset, tmp_path):
+        """Parallel generation must be byte-identical to serial.
+
+        This is the property that makes `--workers` safe to use and sharding
+        trustworthy: sample *i* depends on (seed, index, card, profile), never on
+        which process happened to render it or in what order.
+        """
+        import hashlib
+
+        from cardvault_vision.synthetic import SyntheticConfig
+        from cardvault_vision.synthetic.pipeline import generate_dataset
+
+        def digests(workers: int) -> dict[str, str]:
+            out = tmp_path / f"w{workers}"
+            generate_dataset(
+                source_dataset,
+                SyntheticConfig(profile="phone_normal", count=5, seed=11,
+                                render_scale=0.25, workers=workers,
+                                min_visibility=0.0, min_legibility=0.0),
+                output_dir=out)
+            return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in sorted((out / "images").glob("*"))}
+
+        serial = digests(1)
+        parallel = digests(3)
+        assert serial
+        assert set(serial) == set(parallel)
+        assert serial == parallel
