@@ -56,6 +56,8 @@ class TestDatasetPipeline:
 @pytest.mark.torch
 class TestTrainingToExport:
     def test_full_chain(self, synthetic_dataset, tmp_path):
+        import onnx
+
         from cardvault_vision.export.onnx_export import export_onnx, spec_from_checkpoint
         from cardvault_vision.export.registry import promote, register_export
         from cardvault_vision.export.validate import validate_export
@@ -94,11 +96,20 @@ class TestTrainingToExport:
             "weights must not live in a sidecar file"
 
         metadata = json.loads((artifact / "metadata.json").read_text())
+        # Every axis metadata advertises as dynamic must be symbolic in the graph.
+        # The dynamo exporter's `dynamic_shapes` path silently fixed batch=1 while
+        # still reporting "batch", so this is checked rather than assumed.
+        graph_input = onnx.load(str(artifact / "model.onnx")).graph.input[0]
+        axes = [(dim.dim_param or dim.dim_value)
+                for dim in graph_input.type.tensor_type.shape.dim]
+        for declared in metadata["input_spec"]["shape"]:
+            if isinstance(declared, str):
+                assert declared in axes, \
+                    f"metadata declares dynamic {declared!r} but graph axes are {axes}"
         assert metadata["task"] == "name-ocr"
         assert metadata["version"] == "0.1.0"
         assert metadata["num_classes"] == len(charset) + 2
         # The recorded opset must match the graph, or the consumer is misled.
-        import onnx
         graph_opset = [o.version for o in onnx.load(str(artifact / "model.onnx")).opset_import
                        if o.domain in ("", "ai.onnx")][0]
         assert metadata["opset"] == graph_opset

@@ -33,8 +33,9 @@ Torch/ONNX are optional; exporting raises a precise error with an install hint.
 from __future__ import annotations
 
 import hashlib
-import re
 import json
+import re
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,6 +133,37 @@ def _graph_opset(model_path: Path) -> int:
         if entry.domain in ("", "ai.onnx"):
             return int(entry.version)
     return 0
+
+
+def _verify_dynamic_axes(model_path: Path, spec: ExportSpec) -> None:
+    """Check the written graph really has the symbolic axes metadata promises.
+
+    ``metadata.json`` tells CardVault it may send any batch size and (for OCR) any
+    width. An exporter that quietly bakes one of those in as a constant produces a
+    model that works until the first batch of two arrives. Fail the export here
+    instead.
+    """
+    try:
+        import onnx
+    except ImportError:  # pragma: no cover
+        return
+    graph = onnx.load(str(model_path), load_external_data=False).graph
+    inputs = {value.name: value for value in graph.input}
+    image_input = inputs.get("images")
+    if image_input is None:
+        raise ExportError("Exported graph has no input named 'images'")
+    axes = [(dim.dim_param or dim.dim_value)
+            for dim in image_input.type.tensor_type.shape.dim]
+    expected = {0: "batch"}
+    if spec.is_ocr:
+        expected[3] = "width"
+    for index, name in expected.items():
+        if axes[index] != name:
+            raise ExportError(
+                f"Exported graph axis {index} is {axes[index]!r}, expected symbolic "
+                f"{name!r}. metadata.json would advertise a dynamic axis the model "
+                f"does not have. Check the exporter version or the dynamic_axes call."
+            )
 
 
 def _assert_self_contained(out_dir: Path, model_path: Path) -> None:
@@ -302,25 +334,37 @@ def export_onnx(
         dynamic_axes = {"images": {0: "batch"}, "logits": {0: "batch"}}
         input_names = ["images"]
 
+    # Use ``dynamic_axes`` rather than the newer ``dynamic_shapes``.
+    #
+    # The dynamo exporter prefers ``dynamic_shapes`` and warns about this call,
+    # but in this torch version it only applies the *last* axis of a rank-4
+    # input, silently exporting batch=1 as a constant. Verified by reading the
+    # written graph: the width stayed symbolic while batch did not. A graph that
+    # only accepts batch 1 while metadata advertises a dynamic batch is a worse
+    # outcome than a warning, so we keep the API that produces the right graph.
+    # ``_verify_dynamic_axes`` below re-checks the graph and fails the export if
+    # this behaviour ever changes.
     try:
-        torch.onnx.export(
-            model,
-            dummy,
-            str(model_path),
-            input_names=input_names,
-            output_names=["logits"],
-            dynamic_axes=dynamic_axes,
-            opset_version=spec.opset,
-            do_constant_folding=True,
-            export_params=True,
-            # Force a single self-contained file. torch.onnx now defaults to
-            # spilling weights over 2 GB into a sidecar "<model>.data" file, and
-            # even smaller models can end up externalised depending on version.
-            # A producer/consumer handoff through a file drop cannot rely on two
-            # files arriving together, and a checksum that covers only the graph
-            # would not detect a missing weight file - so refuse the sidecar.
-            external_data=False,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*dynamic_axes.*")
+            torch.onnx.export(
+                model,
+                dummy,
+                str(model_path),
+                input_names=input_names,
+                output_names=["logits"],
+                dynamic_axes=dynamic_axes,
+                opset_version=spec.opset,
+                do_constant_folding=True,
+                export_params=True,
+                # Force a single self-contained file. torch.onnx now defaults to
+                # spilling weights over 2 GB into a sidecar "<model>.data" file,
+                # and even smaller models can end up externalised depending on
+                # version. A producer/consumer handoff through a file drop cannot
+                # rely on two files arriving together, and a checksum covering
+                # only the graph would not detect a missing weight file.
+                external_data=False,
+            )
     except Exception as exc:
         raise ExportError(f"ONNX export failed for {spec.task}: {exc}") from exc
 
@@ -338,6 +382,7 @@ def export_onnx(
     write_json(out_dir / "contract.json", contract_spec(spec))
 
     _assert_self_contained(out_dir, model_path)
+    _verify_dynamic_axes(model_path, spec)
     actual_opset = _graph_opset(model_path)
     if actual_opset != spec.opset:
         # Newer torch.onnx can upgrade the requested opset. The graph is what
