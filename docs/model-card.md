@@ -69,6 +69,32 @@ it wins, and that benchmark has not been run.
   confusion, layout/language) and emits a targeted generation command to cover
   the gap.
 
+## Measured baseline (CPU, synthetic)
+
+A `crnn` name-OCR run on a 900-sample synthetic set rendered at full scale
+(60 source cards, `phone_normal`), 49/7/4 card split, 40 epochs, batch 8,
+lr 1e-3:
+
+| Metric | Value |
+|---|---|
+| held-out CER (val, 53 samples) | **0.826** |
+| train loss (epoch 40) | 2.18 |
+| samples/s | ~26 |
+
+This is a smoke-level result, not a quality claim: 49 training cards carry only
+ten distinct names, so the model is reading glyphs rather than memorising — it
+decodes `Diego Ortiz` as `Diego Ortizia` and `Julio Ortiz` as `Treno bekiz` —
+but exact-match stays at 0% because the vocabulary is far too small to close
+the last characters. Scaling the source pool is the next step; the pipeline no
+longer has a structural reason to fail.
+
+Getting to this number required fixing four separate data bugs, each of which
+produced CER exactly 1.0 and looked like a broken model: stratified splitting
+that confined whole card types to one split, `name-ocr` hardcoding the `name`
+field when sports layouts use `player`, a source pool that let one card take 43%
+of all draws, and rendering at `render_scale` 0.5, which left name crops ~10 px
+tall. See `docs/decisions.md`.
+
 ## Limitations
 
 1. Metrics reported so far are measured on **synthetic** data. They describe the

@@ -161,3 +161,34 @@ only mutation.
 
 **Why.** A version that can change underneath a consumer is not a version. The
 registry stores a checksum so what was promoted can be verified afterwards.
+
+---
+
+## "CER is exactly 1.0" is a data bug, not a model bug
+
+**Decision.** Treat a plateaued metric that sits at its worst possible value as
+evidence about the *data pipeline* first, and add a check for each cause found.
+
+**Why.** Name-OCR trained for 30 epochs and predicted the empty string for
+every input. The model was fine — it learned rendered words in an 80-step
+control experiment — but four independent data defects each produced the same
+symptom:
+
+1. **Stratified splitting was one global prefix.** Interleaving every stratum
+   into a single sequence and slicing it per split sent all 621 sports cards to
+   train and left val holding only TCG types, so a sports-only field had an
+   empty validation set. Allocation now happens within each stratum.
+2. **`name-ocr` hardcoded `field="name"`.** Sports layouts call the title box
+   `player`, so 645 of 685 samples were skipped and the trainer "failed" on the
+   40 that remained. The field is now resolved from the dataset and logged.
+3. **One source card could dominate selection.** Type-balancing gave every card
+   type equal probability, so a single basketball card absorbed 43% of draws:
+   290 of 700 samples were the same card and 598 sports samples had 9 distinct
+   names. Selection now caps any card at 4x its uniform share.
+4. **Text rendered ~10 px tall.** At `render_scale=0.5` a name crop is 27 px,
+   leaving glyphs too small for any head to read; at 1.0 it is 96 px. Dataset
+   validation now reports `illegible_text` below 24 px.
+
+With all four fixed, held-out CER went 1.0000 → 0.826 on 49 training cards.
+The lesson is the diagnostic order: a metric pinned at its worst value means the
+inputs carry no signal, and no amount of schedule or capacity tuning fixes that.
