@@ -247,6 +247,42 @@ def _observed_classes(samples) -> list[str]:
     return ordered
 
 
+def _comparison_verdict(results: dict, best, val_samples: int) -> str:
+    """State whether the winner is actually distinguishable from the rest.
+
+    A comparison over a handful of validation samples will always produce a
+    "winner"; reporting it without a caveat invites someone to adopt an
+    architecture because of noise. The roadmap says an architecture is adopted
+    only when a benchmark shows an advantage, so say when it does not.
+    """
+    if not best or best[1].get("best_metric") is None:
+        return "  best: (no metrics recorded)"
+    winner, record = best
+    metric = record.get("best_metric")
+    line = f"  best: {winner} ({record.get('metric_name', 'metric')}={metric:.4f})"
+
+    runners = [(name, item.get("best_metric")) for name, item in results.items()
+               if name != winner and item.get("best_metric") is not None]
+    if not runners:
+        return line
+    # The metric is CER for OCR (lower is better); macro-F1 is higher-is-better.
+    lower_is_better = record.get("metric_name") == "cer"
+    deltas = [abs(metric - other) if lower_is_better else other - metric
+              for _, other in runners]
+    closest = min(deltas)
+    # With tiny validation sets any difference is sampling noise, not a result.
+    min_meaningful = 1.0 / max(val_samples, 1)
+    if val_samples < 20 or closest < min_meaningful:
+        return "\n".join([
+            line,
+            f"  WARNING: not a reliable result. Closest rival is within "
+            f"{closest:.4f} and validation has {val_samples} sample(s); with so "
+            f"few samples this difference is noise. Train longer on a larger "
+            f"validation split before adopting an architecture.",
+        ])
+    return line
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     """Train each architecture under identical conditions and compare."""
     from ..training.trainer import TrainConfig, train_classifier, train_ocr
@@ -296,6 +332,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
                key=lambda kv: kv[1].get("best_metric", 1e9)
                if kv[1].get("metric_name") == "cer"
                else -kv[1].get("best_metric", -1e9)) if results else None
+    verdict = _comparison_verdict(results, best, len(val_samples))
     human = "\n".join([
         heading(f"Architecture comparison: {args.task}"),
         kv_block([("dataset", manifest.name), ("epochs", args.epochs),
@@ -304,7 +341,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         subheading("Results"),
         format_table(["architecture", "metric", "time", "checkpoint"], rows),
         "",
-        f"  best: {best[0]}" if best and best[1].get("best_metric") is not None else "",
+        verdict,
         "  note: identical split, seed, budget per architecture (roadmap Phase 3 rule).",
     ])
     payload = {"task": args.task, "results": results,

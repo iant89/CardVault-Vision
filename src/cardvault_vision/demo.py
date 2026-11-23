@@ -88,6 +88,13 @@ def random_number(card_type: str, rng: np.random.Generator) -> str:
     return f"{int(rng.integers(1, 999))}"
 
 
+#: Every card type that uses the shared sports layout. SPORTS itself must be in
+#: this set: it is the canonical key the alias table resolves generic sports
+#: spellings to, so omitting it silently fell through to the generic
+#: name/number branch and produced sports cards with no player field.
+_SPORTS_TYPES = frozenset({"SPORTS", "BASEBALL", "FOOTBALL", "BASKETBALL", "HOCKEY"})
+
+
 def random_name(card_type: str, rng: np.random.Generator, *, allow_kana: bool = True) -> str:
     """Invent a card name in the style of the given game."""
     if allow_kana and card_type == "POKEMON" and rng.random() < 0.12:
@@ -102,7 +109,7 @@ def random_name(card_type: str, rng: np.random.Generator, *, allow_kana: bool = 
         return str(rng.choice(_MAGIC_NAMES))
     if card_type == "YU_GI_OH":
         return str(rng.choice(_YUGIOH_NAMES))
-    if card_type in {"BASEBALL", "FOOTBALL", "BASKETBALL", "HOCKEY"}:
+    if card_type in _SPORTS_TYPES:
         name = f"{rng.choice(_SPORTS_FIRST)} {rng.choice(_SPORTS_LAST)}"
         if rng.random() < 0.1:
             return str(rng.choice(_ACCENTED))
@@ -131,7 +138,7 @@ def random_fields(card_type: str, rng: np.random.Generator) -> dict[str, str]:
             "number": random_number(card_type, rng),
             "set": str(rng.choice(_YUGIOH_SETS)),
         }
-    if card_type in {"BASEBALL", "FOOTBALL", "BASKETBALL", "HOCKEY"}:
+    if card_type in _SPORTS_TYPES:
         return {
             "player": random_name(card_type, rng),
             "number": random_number(card_type, rng),
@@ -142,6 +149,12 @@ def random_fields(card_type: str, rng: np.random.Generator) -> dict[str, str]:
 
 
 def random_card_type(rng: np.random.Generator) -> str:
+    """Pick a canonical card type for a demo card.
+
+    Only canonical ``CARD_TYPES`` are emitted. Drawing a non-canonical spelling
+    here would rely on the normaliser to map it, and a mis-mapped alias silently
+    changes which layout (and so which fields) the card gets.
+    """
     return str(rng.choice([
         "POKEMON", "MAGIC_THE_GATHERING", "YU_GI_OH", "BASEBALL", "FOOTBALL",
         "BASKETBALL", "HOCKEY",

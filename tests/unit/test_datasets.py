@@ -190,3 +190,51 @@ class TestCardTypeTaxonomy:
         )
         for sample in manifest.samples:
             assert sample.annotation.fields, sample.image_id
+
+
+class TestDemoVocabulary:
+    """Demo cards must exercise the real layout, or the pipeline is tested on
+    an easier problem than it claims to solve."""
+
+    def test_sports_cards_get_sports_fields(self):
+        import numpy as np
+
+        from cardvault_vision.demo import random_fields
+        from cardvault_vision.datasets.schema import CARD_TYPES
+
+        rng = np.random.default_rng(0)
+        for card_type in ("SPORTS", "BASEBALL", "FOOTBALL", "BASKETBALL", "HOCKEY"):
+            fields = random_fields(card_type, rng)
+            assert set(fields) == {"player", "number", "team", "year"}, card_type
+            assert all(value.strip() for value in fields.values())
+
+    def test_trading_card_games_get_their_own_fields(self):
+        import numpy as np
+
+        from cardvault_vision.demo import random_fields
+
+        rng = np.random.default_rng(0)
+        assert "name" in random_fields("POKEMON", rng)
+        assert "type_line" in random_fields("MAGIC_THE_GATHERING", rng)
+
+    def test_random_card_type_returns_only_canonical_types(self):
+        import numpy as np
+
+        from cardvault_vision.demo import random_card_type
+        from cardvault_vision.datasets.schema import CARD_TYPES
+
+        rng = np.random.default_rng(0)
+        for _ in range(200):
+            assert random_card_type(rng) in CARD_TYPES
+
+    def test_bootstrap_accepts_aliases_and_canonicalises(self, tmp_path):
+        """`--types sports,pokemon` must produce complete sports cards."""
+        from cardvault_vision.cli.commands_dataset import bootstrap_source_dataset
+
+        manifest = bootstrap_source_dataset(tmp_path / "aliased", count=4, seed=1,
+                                            types="sports,pokemon")
+        types = {sample.annotation.card_type for sample in manifest.samples}
+        assert types == {"SPORTS", "POKEMON"}
+        for sample in manifest.samples:
+            if sample.annotation.card_type == "SPORTS":
+                assert "player" in sample.annotation.fields
