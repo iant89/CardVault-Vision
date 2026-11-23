@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cardvault-vision"
+dynamic = ["version"]
+description = "CardVault Vision - the CardVault model factory (datasets, synthetic scans, OCR, export)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "CardVault" }]
+keywords = ["machine-learning", "ocr", "card-detection", "synthetic-data"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Private :: Do Not Upload",
+]
+
+# The core engine (dataset management + the synthetic scan engine) is
+# deliberately torch-free so that data generation can run on any machine,
+# including CPU-only workers and CI containers.
+dependencies = [
+  "numpy>=1.24",
+  "pillow>=9.5",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+train = ["torch>=2.1"]
+export = ["torch>=2.1", "onnx>=1.15", "onnxruntime>=1.16"]
+perf = ["psutil>=5.9"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
+all = [
+  "torch>=2.1",
+  "onnx>=1.15",
+  "onnxruntime>=1.16",
+  "psutil>=5.9",
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+]
+
+[project.scripts]
+vision = "cardvault_vision.cli.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "cardvault_vision.version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "torch: requires PyTorch",
+  "slow: slow integration test",
+  "gpu: requires a CUDA device",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+source = ["cardvault_vision"]
