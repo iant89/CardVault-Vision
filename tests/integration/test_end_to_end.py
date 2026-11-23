@@ -173,6 +173,41 @@ def _consume_without_torch(artifact, metadata) -> None:
     assert isinstance("".join(text), str)
 
 
+class TestSplitManifestRelocation:
+    def test_split_written_to_another_directory_still_finds_its_images(
+            self, synthetic_dataset):
+        """A split manifest must keep pointing at the dataset it came from.
+
+        ``dataset split --out OTHER_DIR`` writes only the manifest - the images
+        stay put - but the command used to repoint ``root`` at the new
+        directory. Every sample then resolved to a path that does not exist, and
+        the next ``train`` failed with "Missing image for 00000000" while naming
+        a root that looked plausible.
+        """
+        from cardvault_vision.cli.commands_dataset import cmd_split
+
+        original = DatasetManifest.load(synthetic_dataset / "manifest.json")
+        out = synthetic_dataset.parent / "elsewhere"
+        args = type("Args", (), {
+            "manifest": str(original.path), "train": 0.7, "val": 0.2, "test": 0.1,
+            "seed": 3, "strategy": "stratified", "no_dedupe": False,
+            "out": str(out), "dry_run": False, "json": True,
+        })()
+        assert cmd_split(args) == 0
+
+        written = DatasetManifest.load(out / "manifest.json")
+        assert written.root == original.root, (
+            f"split manifest root moved to {written.root}; images live under "
+            f"{original.root}"
+        )
+        # And the paths it advertises actually resolve.
+        resolved = [written.resolve(sample.image_path) for sample in written.samples[:5]]
+        assert all(path.exists() for path in resolved), (
+            f"split manifest points at missing images: "
+            f"{[str(p) for p in resolved if not p.exists()]}"
+        )
+
+
 class TestGenerationResume:
     def test_rerunning_the_same_seed_regenerates_nothing(
             self, source_dataset, tmp_path):

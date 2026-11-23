@@ -228,10 +228,24 @@ def cmd_split(args: argparse.Namespace) -> int:
         seed=args.seed, strategy=args.strategy, dedupe=not args.no_dedupe,
     )
     plan.apply(manifest.samples)
+    # `--out` mirrors every other dataset command: a directory is a dataset
+    # directory (manifest.json goes inside it), and a .json path is the manifest
+    # itself. Accepting a bare directory name as the manifest filename wrote an
+    # extension-less JSON file, which then failed to load and confused the root
+    # resolution for every later command.
     target = Path(args.out) if args.out else (manifest.path or
                                               (manifest.root / "manifest.json"))
-    if args.out and target != manifest.path:
-        manifest.root = target.parent
+    if args.out and not target.suffix:
+        target = target / "manifest.json"
+    # Do NOT repoint `root` at the new manifest's directory. `--out` writes only
+    # the manifest; the images are never copied, so relocating root made every
+    # sample resolve to a path that does not exist ("Missing image for
+    # 00000000"). Keeping the original root means a split manifest written
+    # anywhere still finds its images.
+    if args.out and target.parent != manifest.root and not (
+            target.parent / "images").is_dir():
+        _LOG.info("Keeping dataset root %s: --out only writes the manifest, "
+                  "the images are not copied", manifest.root)
     if not args.dry_run:
         manifest.save(target)
     counts = plan.counts()
