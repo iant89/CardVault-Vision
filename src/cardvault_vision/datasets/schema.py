@@ -31,6 +31,10 @@ CARD_TYPES = (
     "POKEMON",
     "MAGIC_THE_GATHERING",
     "YU_GI_OH",
+    # Sports cards share one physical layout, so "SPORTS" is a first-class type.
+    # Collapsing it into OTHER (the earlier behaviour) threw away the player
+    # field entirely and made the classifier's catch-all bucket look common.
+    "SPORTS",
     "BASEBALL",
     "FOOTBALL",
     "BASKETBALL",
@@ -54,7 +58,11 @@ CARD_TYPE_ALIASES = {
     "football": "FOOTBALL",
     "basketball": "BASKETBALL",
     "hockey": "HOCKEY",
-    "sports": "OTHER",
+    # Generic sports spellings resolve to the shared sports layout rather than
+    # the catch-all bucket.
+    "sports": "SPORTS",
+    "sports card": "SPORTS",
+    "trading card": "OTHER",
     "other": "OTHER",
     "unknown": "UNKNOWN",
 }

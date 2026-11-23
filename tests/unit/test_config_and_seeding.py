@@ -138,3 +138,13 @@ class TestHardware:
 
     def test_info_is_json_serialisable(self):
         json.dumps(hardware.detect_hardware().to_dict())
+
+
+class TestRepoRoot:
+    def test_repo_root_contains_the_project_files(self):
+        """A wrong REPO_ROOT silently resolves configs to somebody else's tree."""
+        from cardvault_vision.config import CONFIG_DIR, REPO_ROOT
+
+        assert (REPO_ROOT / "pyproject.toml").exists()
+        assert (REPO_ROOT / "src" / "cardvault_vision").is_dir()
+        assert CONFIG_DIR == REPO_ROOT / "configs"

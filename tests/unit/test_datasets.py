@@ -133,3 +133,60 @@ class TestLoader:
         with pytest.raises(Exception):
             dataset = DatasetLoader(manifest)
             dataset.validate()
+
+
+class TestCardTypeTaxonomy:
+    """The taxonomy decides which layout (and so which fields) a card gets."""
+
+    def test_sports_is_a_first_class_type(self):
+        """Collapsing "sports" into OTHER silently dropped the player field.
+
+        Every sports card became OTHER, the catch-all bucket looked common, and
+        the classifier was trained to confuse "unknown game" with "sport".
+        """
+        from cardvault_vision.datasets.schema import CARD_TYPES, normalize_card_type
+
+        assert "SPORTS" in CARD_TYPES
+        assert normalize_card_type("SPORTS") == "SPORTS"
+        assert normalize_card_type("sports") == "SPORTS"
+
+    def test_sports_subtypes_share_the_sports_layout(self):
+        from cardvault_vision.layouts import resolve_layout
+
+        for card_type in ("SPORTS", "BASEBALL", "FOOTBALL", "BASKETBALL", "HOCKEY"):
+            layout = resolve_layout(card_type)
+            assert layout.card_type == "SPORTS", card_type
+            assert "player" in layout.fields
+
+    def test_unknown_game_gets_a_generic_layout(self):
+        """An unknown game must not fail closed - it still has a name and number."""
+        from cardvault_vision.layouts import resolve_layout
+
+        layout = resolve_layout("OTHER")
+        assert layout.card_type == "GENERIC"
+        assert "name" in layout.fields and "number" in layout.fields
+
+    def test_aliases_are_case_insensitive(self):
+        from cardvault_vision.datasets.schema import normalize_card_type
+
+        assert normalize_card_type("pokémon") == "POKEMON"
+        assert normalize_card_type("MTG") == "MAGIC_THE_GATHERING"
+        assert normalize_card_type("yu-gi-oh") == "YU_GI_OH"
+
+    def test_unknown_type_is_rejected(self):
+        from cardvault_vision.datasets.schema import normalize_card_type
+
+        with pytest.raises(ValueError):
+            normalize_card_type("not-a-real-game")
+
+    def test_bootstrap_cards_keep_their_real_fields(self, source_dataset):
+        """End-to-end: a sports card must still carry a player, not just a number."""
+        manifest = DatasetManifest.load(source_dataset / "manifest.json")
+        types = {sample.annotation.card_type for sample in manifest.samples}
+        assert "SPORTS" not in types or any(
+            sample.annotation.card_type == "SPORTS"
+            and "player" in sample.annotation.fields
+            for sample in manifest.samples
+        )
+        for sample in manifest.samples:
+            assert sample.annotation.fields, sample.image_id

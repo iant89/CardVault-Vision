@@ -24,8 +24,25 @@ from typing import Any, Mapping
 
 from .errors import ConfigError
 
+def _find_repo_root(start: Path) -> Path:
+    """Locate the repository root from this module's location.
+
+    An editable install puts this file at ``<repo>/src/cardvault_vision/config.py``
+    (three levels up) while a wheel install puts it in site-packages, where
+    walking up lands somewhere meaningless. Walk up looking for the markers that
+    actually identify the repo, and fall back to the parent of the package rather
+    than to a guessed depth.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / "pyproject.toml").exists() and (candidate / "configs").is_dir():
+            return candidate
+    # A wheel install: configs/ is not shipped, so point at the package's parent
+    # and let the caller treat a missing config dir as "no repo configs".
+    return start.parents[1]
+
+
 #: Repository root (…/CardVault-Vision), derived from this file's location.
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = _find_repo_root(Path(__file__).resolve())
 CONFIG_DIR = REPO_ROOT / "configs"
 
 
@@ -236,6 +253,8 @@ def resolve_config_path(name: str, *, search: tuple[Path, ...] = ()) -> Path:
     if candidate.suffix not in {".yaml", ".yml"}:
         names += [candidate.with_suffix(".yaml"), candidate.with_suffix(".yml")]
     for base in search_dirs:
+        if not base.is_dir():
+            continue
         for candidate_path in names:
             for probe in (base / candidate_path, base / "configs" / candidate_path):
                 if probe.exists():
