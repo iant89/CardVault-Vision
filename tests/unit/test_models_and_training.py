@@ -262,3 +262,55 @@ class TestTrainerSmoke:
         # not flowing (frozen weights, a detached graph, or a zeroed LR).
         losses = [epoch.train_loss for epoch in result.history]
         assert losses[-1] < losses[0]
+
+
+class TestFieldResolutionPrefersVocabulary:
+    """The OCR field must be chosen for *diversity*, not sample count.
+
+    A 700-sample run resolved ``name`` (204 samples, 104 distinct strings) over
+    ``player`` (333 samples, 40 distinct, one string repeated 22 times). That
+    looked like a count bug, but the diversity ranking agreed with the counts.
+    The case that matters is the opposite one: a field with far more samples but
+    a nearly fixed vocabulary teaches the head to memorise, so the resolver must
+    reject it. Ranking by raw count silently picks it.
+    """
+
+    def _manifest(self, name_texts, player_texts):
+        from cardvault_vision.datasets.manifest import DatasetManifest
+        from cardvault_vision.datasets.schema import Annotation, BBox, FieldAnnotation, SampleRecord
+
+        samples = []
+
+        def add(image_id, field, text, split):
+            fields = {field: FieldAnnotation(text=text,
+                                             bbox=BBox(0, 0, 10, 10))}
+            samples.append(SampleRecord(
+                image_id=image_id, card_id=image_id,
+                image_path=f"images/{image_id}.jpg",
+                annotation=Annotation(image_id=image_id, card_id=image_id,
+                                      card_type="MAGIC", fields=fields),
+                split=split))
+
+        for i, text in enumerate(name_texts):
+            add(f"n{i}", "name", text, "train" if i % 5 else "val")
+        for i, text in enumerate(player_texts):
+            add(f"p{i}", "player", text, "train" if i % 5 else "val")
+        return DatasetManifest(name="t", kind="synthetic", samples=samples)
+
+    def test_abundant_but_repetitive_field_loses_to_a_varied_one(self):
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        # 200 `player` samples drawing on 4 strings, 60 `name` samples drawing on
+        # 60 distinct strings. The count-based rule picks `player`.
+        player = [f"Star Player {i % 4}" for i in range(200)]
+        names = [f"Unique Card {i}" for i in range(60)]
+        manifest = self._manifest(names, player)
+
+        assert _resolve_ocr_field(manifest, "name-ocr") == "name"
+
+    def test_canonical_field_wins_when_diversity_is_comparable(self):
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        player = [f"Star Player {i}" for i in range(200)]
+        names = [f"Unique Card {i}" for i in range(150)]
+        assert _resolve_ocr_field(self._manifest(names, player), "name-ocr") == "name"
