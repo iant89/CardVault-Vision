@@ -9,6 +9,13 @@ answer the engine actually returns; ``oracle detection rate`` is how often the
 true card was among the candidates it proposed, before ranking. A large gap
 between them is a ranking problem, not a detection problem, and the two need
 different fixes.
+
+By default this grades what the product would ship: several edge thresholds are
+pooled and the candidates re-ranked (see
+:mod:`cardvault_vision.integrations.selection`). ``--edge-threshold N`` falls back
+to a single engine pass with the engine's own ranking, which is the baseline the
+improvement should always be quoted against. ``--no-rerank`` separates the two
+contributions.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ from pathlib import Path
 from ..console import heading, kv_block, subheading
 from ..errors import ConfigError
 from ..logging_utils import get_logger
-from .util import emit, resolve_manifest
+from .util import print_json, resolve_manifest
 
 _LOG = get_logger("cli.align")
 
@@ -43,7 +50,11 @@ def register(sub: argparse._SubParsersAction) -> None:
                    help="corner error, as a fraction of the card diagonal, that "
                         "counts as correct (default: 0.02)")
     p.add_argument("--edge-threshold", type=int, default=None,
-                   help="override the engine's Sobel threshold for this run")
+                   help="run exactly one engine pass with this Sobel threshold "
+                        "(the default pools several thresholds instead)")
+    p.add_argument("--no-rerank", dest="rerank", action="store_false",
+                   help="pool the edge presets but keep the engine's own ranking, "
+                        "to separate what pooling buys from what re-ranking buys")
     p.add_argument("--output", default=None, help="write the full report as JSON here")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(handler=cmd_align)
@@ -74,7 +85,8 @@ def cmd_align(args: argparse.Namespace) -> int:
 
     loader = DatasetLoader(manifest)
     result = grade(loader, profile=args.profile, tolerance=args.tolerance,
-                   limit=args.limit, options=options or None, engine=args.engine)
+                   limit=args.limit, options=options or None, engine=args.engine,
+                   rerank=args.rerank)
     report = result.report
     summary = report.summary()
     spread = distribution(result)
@@ -83,6 +95,8 @@ def cmd_align(args: argparse.Namespace) -> int:
         "dataset": str(args.dataset),
         "profile": args.profile,
         "tolerance": args.tolerance,
+        "reranked": args.rerank,
+        "single_pass": bool(options),
         **summary,
         "error_distribution": spread,
         "worst": [
@@ -95,15 +109,22 @@ def cmd_align(args: argparse.Namespace) -> int:
         Path(args.output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     if args.json:
-        emit(payload, as_json=True)
+        print_json(payload)
         return 0
 
     heading("Card alignment against synthetic ground truth")
+    if options:
+        mode = f"single engine pass (edgeThreshold={args.edge_threshold}, engine ranking)"
+    elif args.rerank:
+        mode = "pooled edge presets, re-ranked"
+    else:
+        mode = "pooled edge presets, engine ranking"
     print(kv_block([
         ("samples graded", summary["count"]),
         ("aligned (any)", summary["detected"]),
         ("within tolerance", summary["within_tolerance"]),
         ("tolerance", f"{args.tolerance:.1%} of card diagonal"),
+        ("configuration", mode),
     ]))
     if summary["count"]:
         print()
