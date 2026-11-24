@@ -242,3 +242,79 @@ class TestImagingPrimitives:
         mask = radial_mask(120, 90, 60, 45, 30, softness=0.3)
         assert mask[45, 60] == pytest.approx(1.0)
         assert mask[0, 0] == 0.0
+
+
+def _fake_handle(plan, other):
+    """Stand-in for the real renderer: returns a minimal valid record."""
+    from cardvault_vision.datasets.schema import Annotation, SampleRecord
+
+    return SampleRecord(
+        image_id=plan.image_id, card_id=plan.source_card.card_id,
+        image_path=f"images/{plan.image_id}.jpg",
+        annotation=Annotation(image_id=plan.image_id,
+                              card_id=plan.source_card.card_id,
+                              card_type=plan.source_card.card_type),
+    )
+
+
+class TestWorkerCrashesAreNotRejections:
+    """A dead worker must not be reported as a low-quality sample.
+
+    A 2800-sample run returned 1810 images with 990 "rejections", all of them
+    ``worker_error: A process in the process pool was terminated abruptly``. The
+    kernel log showed the OOM killer terminating a worker at 1.47 GB RSS; the
+    pool converted that death into a per-sample rejection, so the dataset shrank
+    by a third while the run reported success. Data loss must be loud.
+    """
+
+    def test_broken_pool_is_retried_not_counted_as_rejection(self, monkeypatch, pool):
+        from concurrent.futures.process import BrokenProcessPool
+
+        from cardvault_vision.synthetic import pipeline
+
+        calls = []
+
+        class _ExplodingExecutor:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def submit(self, fn, index, *a, **k):
+                from concurrent.futures import Future
+
+                calls.append(index)
+                future: Future = Future()
+                future.set_exception(
+                    BrokenProcessPool("worker terminated abruptly"))
+                return future
+
+        monkeypatch.setattr(pipeline, "ProcessPoolExecutor", _ExplodingExecutor)
+
+        config = SyntheticConfig(count=3, seed=5, workers=2, **CONFIG)
+        report = pipeline.GenerationReport(
+            dataset_name="t", generated=0, rejected=0, skipped=0,
+            duration_s=0.0, manifest_path=None,
+        )
+        records = pipeline._generate_parallel(
+            pending=[0, 1, 2], seed=5, pool=pool, config=config,
+            profile_weights=resolve_profiles("phone_normal"), out_dir=None,
+            report=report, handle=_fake_handle, progress=None, total=3,
+        )
+
+        # The retry path ran in-process, so the crash was never billed as a
+        # rejection.
+        assert not any("worker_error" in key for key in report.rejection_reasons), \
+            report.rejection_reasons
+        assert report.rejected == 0
+        assert len(records) == 3
+
+    def test_worker_pool_is_capped_in_size(self):
+        """Workers downscale the source pool; the parent must not."""
+        from cardvault_vision.synthetic.pipeline import _WORKER_SOURCE_MAX_SIDE
+
+        assert 256 <= _WORKER_SOURCE_MAX_SIDE <= 2000

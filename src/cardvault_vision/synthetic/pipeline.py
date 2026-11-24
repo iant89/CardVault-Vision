@@ -30,6 +30,7 @@ import os
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -673,6 +674,7 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
     raised so one bad sample cannot kill a 100k run.
     """
     records: list[SampleRecord] = []
+    crashed: list[int] = []
     payload = [(index, seed, config) for index in pending]
     completed = 0
     with ProcessPoolExecutor(max_workers=config.workers) as executor:
@@ -689,7 +691,16 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
         for future in as_completed(futures):
             try:
                 record_dict, rejection = future.result()
-            except Exception as exc:  # pragma: no cover - worker crash
+            except BrokenProcessPool:
+                # A worker died (in practice: the OOM killer, which terminated a
+                # worker at 1.47 GB RSS). This is *not* a property of the sample,
+                # and counting it as a rejection silently loses thousands of
+                # images from a dataset that reports success - a 2800-sample run
+                # came back with 1810 images and 990 "rejections" that were all
+                # this. Surface it as a failure the caller must see.
+                crashed.append(futures[future])
+                continue
+            except Exception as exc:  # pragma: no cover - worker raised
                 record_dict, rejection = None, f"worker_error: {exc}"
             if record_dict is None:
                 report.rejected += 1
@@ -707,12 +718,45 @@ def _generate_parallel(*, pending, seed, pool, config, profile_weights, out_dir,
             completed += 1
             if progress is not None:
                 progress(completed, total)
+
+    if crashed:
+        _LOG.warning(
+            "A generation worker died (likely the OOM killer); retrying %d "
+            "sample(s) sequentially in this process", len(crashed),
+        )
+        for index in crashed:
+            plan = plan_sample(index=index, seed=seed, pool=pool, config=config,
+                               profile_weights=profile_weights)
+            other = None
+            if other_cards:
+                chooser = rng_for(seed, "other_card", index)
+                other = other_cards[int(chooser.integers(0, len(other_cards)))]
+            record, rejected_reason = _attempt(plan, handle, config, other)
+            if record is None:
+                report.rejected += 1
+                key = rejected_reason or "unknown"
+                report.rejection_reasons[key] = report.rejection_reasons.get(key, 0) + 1
+            else:
+                records.append(record)
+                report.generated += 1
+                if record.profile:
+                    report.profile_counts[record.profile] = report.profile_counts.get(
+                        record.profile, 0) + 1
+                for problem in record.tags:
+                    report.problem_counts[problem] = report.problem_counts.get(
+                        problem, 0) + 1
     return records
 
 
 _WORKER_POOL: SourcePool | None = None
 _WORKER_POOL_KEY: str | None = None
 _WORKER_OTHER_CARDS: list | None = None
+
+#: Long-edge cap applied to source cards loaded *inside a worker process*.
+#: The parent keeps full resolution so serial and parallel runs stay identical;
+#: see ``_worker_generate`` for why the workers, which each hold a private copy
+#: of the whole pool, cannot afford to.
+_WORKER_SOURCE_MAX_SIDE = 1400
 
 
 def _worker_other_cards() -> list:
@@ -759,7 +803,14 @@ def _worker_generate(index: int, seed: int, config_dict: dict, *,
                 "Parallel generation needs a source path; pass the source dataset "
                 "directory or manifest file rather than an in-memory pool."
             )
-        _WORKER_POOL = load_source_pool(resolved)
+        # Workers only paste source cards onto a canvas whose long edge is
+        # ``render_scale * target_width``; keeping 250 full-resolution source
+        # images resident per worker wasted ~0.42 GB and got workers OOM-killed
+        # mid-run (the kernel log showed a 1.47 GB RSS python). Cap the long
+        # edge: at the default 1240 px render the pasted card never exceeds
+        # ~1150 px, so 1400 is lossless for every profile above 0.9 scale and
+        # roughly halves the footprint.
+        _WORKER_POOL = load_source_pool(resolved, max_side=_WORKER_SOURCE_MAX_SIDE)
         _WORKER_POOL_KEY = key
 
     config = SyntheticConfig(**{**_clean_config_dict(config_dict)})
