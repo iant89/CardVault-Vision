@@ -114,6 +114,11 @@ class OCRReport:
     worst: list[dict] = field(default_factory=list)
     mean_confidence: float | None = None
     low_confidence_accuracy: float | None = None
+    #: CER split by whether the reference string was present in the training
+    #: split. This is the difference between "reads glyphs" and "recalls a
+    #: vocabulary": a model that has memorised a small name list scores well on
+    #: ``seen`` and collapses on ``unseen``.
+    by_vocabulary: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @property
     def is_perfect(self) -> bool:
@@ -170,6 +175,13 @@ class OCRReport:
             for bucket, values in sorted(self.by_length.items()):
                 lines.append(
                     f"    {bucket:<8} n={int(values['count']):<5} "
+                    f"CER={values['cer']:.4f} exact={values['exact_match']:.1%}"
+                )
+        if self.by_vocabulary:
+            lines.append("\n  by training vocabulary:")
+            for label, values in sorted(self.by_vocabulary.items()):
+                lines.append(
+                    f"    {label:<8} n={int(values['count']):<5} "
                     f"CER={values['cer']:.4f} exact={values['exact_match']:.1%}"
                 )
         top = self.top_confusions(8)
@@ -258,8 +270,15 @@ def evaluate_ocr(
     image_ids: Sequence[str] | None = None,
     confidences: Sequence[float] | None = None,
     worst_n: int = 10,
+    known_references: Sequence[str] | None = None,
 ) -> OCRReport:
-    """Compute the standard OCR report."""
+    """Compute the standard OCR report.
+
+    ``known_references`` is the set of reference strings the model was trained
+    on. When supplied, the report splits metrics into ``seen`` and ``unseen``.
+    Without that split a CER measured on a small fixed vocabulary cannot be told
+    apart from one measured on real reading.
+    """
     if len(predictions) != len(references):
         raise ValueError("predictions and references must be the same length")
     if not references:
@@ -270,6 +289,22 @@ def evaluate_ocr(
 
     per_sample = [edit_distance(p, r) / max(len(r), 1)
                   for p, r in zip(predictions, references, strict=True)]
+
+    by_vocabulary: dict[str, dict[str, float]] = {}
+    if known_references is not None:
+        known = set(known_references)
+        for label, wanted in (("seen", True), ("unseen", False)):
+            indices = [i for i, r in enumerate(references) if (r in known) is wanted]
+            if not indices:
+                continue
+            total_length = sum(len(references[i]) for i in indices) or 1
+            distance = sum(edit_distance(predictions[i], references[i]) for i in indices)
+            by_vocabulary[label] = {
+                "count": len(indices),
+                "cer": distance / total_length,
+                "exact_match": sum(predictions[i] == references[i] for i in indices)
+                                / len(indices),
+            }
 
     buckets: dict[str, dict[str, float]] = {}
     for prediction, reference in zip(predictions, references, strict=False):
@@ -325,6 +360,7 @@ def evaluate_ocr(
         worst=worst,
         mean_confidence=mean_confidence,
         low_confidence_accuracy=low_conf_accuracy,
+        by_vocabulary=by_vocabulary,
     )
 
 

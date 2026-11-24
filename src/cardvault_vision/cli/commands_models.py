@@ -278,11 +278,18 @@ def _resolve_ocr_field(manifest, task_key: str) -> str:
                 per_split[name][sample.split] += 1
     universal = [name for name in wanted if counts[name] and
                  all(per_split[name][split] for split in splits)] or list(wanted)
-    best = max(universal, key=lambda name: counts[name])
-    # Keep the canonical field when it is *usable*; only fall back to another
-    # layout's field when the canonical one would throw away most of the split.
-    # Both must be present in every split (checked above).
-    if preferred in universal and counts[preferred] >= 0.5 * max(counts[best], 1):
+    # Rank by *vocabulary diversity*, not raw sample count. OCR trains on
+    # glyphs: 173 samples carrying 90 distinct strings is a far better signal
+    # than 333 samples carrying 40, even though the latter is bigger. Ranking by
+    # count alone picked the field with 3x the samples and half the vocabulary.
+    diversity = {name: len({a.text.strip() for s in manifest.samples
+                            if s.split in ("train", "val")
+                            for a in [s.annotation.fields.get(name)] if a and a.text.strip()})
+                 for name in wanted}
+    best = max(universal, key=lambda name: (diversity[name], counts[name]))
+    # Keep the canonical field when it is *usable*: present everywhere and not
+    # dramatically less varied than the alternative.
+    if preferred in universal and diversity[preferred] >= 0.5 * max(diversity[best], 1):
         best = preferred
     if not counts[best]:
         raise ConfigError(
@@ -292,13 +299,14 @@ def _resolve_ocr_field(manifest, task_key: str) -> str:
     coverage = counts[best] / max(total, 1)
     if coverage < 0.9:
         _LOG.warning(
-            "Using field %r for %s: only %d/%d samples (%.0f%%) have it (%s). "
-            "Pass --field to override.", best, task_key, counts[best], total,
-            coverage * 100, ", ".join(f"{k}={v}" for k, v in counts.items() if v),
+            "Using field %r for %s: only %d/%d samples (%.0f%%) have it, "
+            "%d distinct strings (%s). Pass --field to override.",
+            best, task_key, counts[best], total, coverage * 100, diversity[best],
+            ", ".join(f"{k}={v}" for k, v in counts.items() if v),
         )
     else:
-        _LOG.info("Using field %r for %s (%d/%d samples)", best, task_key,
-                  counts[best], total)
+        _LOG.info("Using field %r for %s (%d/%d samples, %d distinct)", best,
+                  task_key, counts[best], total, diversity[best])
     if "test" in per_split.get(best, {}) and not per_split[best].get("test"):
         _LOG.warning(
             "Field %r has no test-split samples, so held-out evaluation of %s "

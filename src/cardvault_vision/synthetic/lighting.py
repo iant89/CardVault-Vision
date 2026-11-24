@@ -37,6 +37,26 @@ from .imaging import (
 )
 from .materials import LightSource
 
+#: Luminance the metering loop aims for. A camera exposes the average scene to
+#: roughly 18% grey; card photos are usually a little brighter than that.
+METER_TARGET_LUMA = 0.42
+
+#: Rec. 601 luminance weights - what a camera's meter actually integrates.
+_LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+
+#: Ceiling on how much the metering loop may brighten or darken a frame. Real
+#: auto-exposure has a finite range, and letting the loop work unbounded would
+#: erase the legitimate dark-frame cases from the distribution.
+_AUTO_EXPOSURE_MAX_GAIN = 3.5
+
+#: Stop the loop short of clipping the brightest pixel, so gentle overexposure
+#: still resolves as a gradient instead of being flattened by the guard.
+_AUTO_EXPOSURE_CLIP_GUARD = 0.92
+
+#: Gain ceiling for a scene the lighting has deliberately underexposed. Kept
+#: under the general ceiling so "shot in the dark" stays dark.
+_AUTO_EXPOSURE_DARK_SCENE_MAX_GAIN = 1.6
+
 
 @dataclass
 class LightingConfig:
@@ -57,6 +77,9 @@ class LightingConfig:
     underexposed: bool = False
     tint: tuple[float, float] = (1.0, 1.0)   # extra r/b white-balance gains
     noise_from_iso: float = 0.0      # how much shadow noise the exposure implies
+    auto_exposure: float = 1.0       # multiplier the metering loop settles on
+    exposure_bias: float = 0.0       # deliberate deviation, in stops
+    meter_target: float = METER_TARGET_LUMA
 
     def to_dict(self) -> dict:
         out = {
@@ -72,6 +95,8 @@ class LightingConfig:
             "underexposed": self.underexposed,
             "tint": [round(self.tint[0], 3), round(self.tint[1], 3)],
             "noise_from_iso": round(self.noise_from_iso, 3),
+            "auto_exposure": round(self.auto_exposure, 3),
+            "exposure_bias": round(self.exposure_bias, 3),
         }
         if self.key is not None:
             out["key"] = self.key.to_dict()
@@ -166,6 +191,43 @@ def apply_lighting(
     out = adjust_contrast(out, config.contrast)
     if abs(config.saturation - 1.0) > 1e-3:
         out = adjust_saturation(out, config.saturation)
+
+    # ---- auto exposure --------------------------------------------------
+    # A camera meters the scene and settles on an exposure that puts the subject
+    # at mid-grey; that is what makes a photo of a white card look like a photo
+    # of a white card. Without it the chain is open-loop and *every* term only
+    # darkens: the illumination field averages below 1, ``soft_light`` scales by
+    # 0.6..1.4, ``adjust_exposure`` multiplies by 2**brightness with a negative
+    # mean, and the surface shading multiplies again. The measured result was
+    # renders 2.03x darker than the source cards, with only 0.36 correlation
+    # between source and rendered luminance - the simulator was discarding the
+    # scene's actual brightness, and 30% of name crops came out with a maximum
+    # luminance below 0.35, i.e. text no reader could recover.
+    #
+    # The loop targets a mid-grey exposure and is gain-limited, which is exactly
+    # how a real meter behaves: it cannot rescue a frame that is genuinely dark
+    # (auto-exposure has finite ISO and shutter), and it cannot stop a genuine
+    # overexposure from clipping. ``exposure_bias`` lets the profile and the
+    # ``low_light`` problem ask for a deliberately darker frame, and the
+    # hard-coded ``underexposed`` * 0.18..0.4 multiplier below still applies
+    # after this, so those shots remain unrecoverable on purpose.
+    # Meter on *perceived* luminance, not the RGB mean: a card that is mostly
+    # saturated blue has the same RGB mean as a grey one but is far darker to a
+    # meter, and using the mean over-brightened coloured cards into clipping.
+    metered = float(np.clip(np.dot(out, _LUMA_WEIGHTS).mean(), 1e-4, 1.0))
+    max_gain = _AUTO_EXPOSURE_MAX_GAIN
+    if config.brightness < -0.5:
+        # Deliberately dark scene: the meter is already at its gain limit, and
+        # amplifying past it only lifts noise. Without this the ``low_light``
+        # problem (brightness mean -1.2 stops) metered its way back to the same
+        # luminance as an ordinary shot and the defect disappeared.
+        max_gain = min(max_gain, _AUTO_EXPOSURE_DARK_SCENE_MAX_GAIN)
+    gain = np.clip(config.meter_target / metered, 1.0 / max_gain, max_gain)
+    gain = min(gain, _AUTO_EXPOSURE_CLIP_GUARD / max(float(out.max()), 1e-4))
+    gain = float(np.clip(gain, 1.0 / max_gain, max_gain))
+    gain *= float(2.0 ** config.exposure_bias)
+    config.auto_exposure = gain
+    out = np.clip(out * gain, 0.0, 1.0).astype(np.float32)
 
     # Sensor clipping happens last: an overexposed name field becomes flat white
     # and the text information is genuinely destroyed (not merely hidden).

@@ -91,6 +91,51 @@ class TestOcrContract:
         assert int(model.output_length(200)) >= 4 * len(name) // 2
 
 
+class TestVocabularySplit:
+    """CER must be separable into "reads glyphs" and "recalls a list".
+
+    With a fixed 12-name vocabulary a model can score well by memorising it, and
+    a single CER number cannot tell that apart from real reading.
+    """
+
+    def test_seen_and_unseen_are_reported_separately(self):
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(
+            ["Diego Ortiz", "Diego Ortiz", "Treno bekiz"],
+            ["Diego Ortiz", "Julio Ortiz", "Trevor Mbeki"],
+            known_references=["Diego Ortiz", "Julio Ortiz"],
+        )
+        assert set(report.by_vocabulary) == {"seen", "unseen"}
+        assert report.by_vocabulary["seen"]["count"] == 2
+        assert report.by_vocabulary["unseen"]["count"] == 1
+        # Memorised names score better than the genuinely unseen one.
+        assert (report.by_vocabulary["seen"]["cer"]
+                < report.by_vocabulary["unseen"]["cer"])
+
+    def test_split_is_omitted_without_a_known_vocabulary(self):
+        """Callers that do not know the training vocabulary must not get a
+        misleading empty or all-zero block."""
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(["a"], ["a"])
+        assert report.by_vocabulary == {}
+        assert "by training vocabulary" not in report.report()
+
+    def test_a_perfect_memoriser_is_exposed(self):
+        """The failure mode this exists to catch: exact on seen, hopeless on
+        unseen. Overall CER alone would look respectable."""
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(
+            ["Diego Ortiz", "Diego Ortiz", "XXXXX"],
+            ["Diego Ortiz", "Diego Ortiz", "Trevor Mbeki"],
+            known_references=["Diego Ortiz"],
+        )
+        assert report.by_vocabulary["seen"]["exact_match"] == 1.0
+        assert report.by_vocabulary["unseen"]["exact_match"] == 0.0
+
+
 class TestOcrBatchBucketing:
     """Batches must group similar widths; cost scales with the widest crop."""
 
@@ -217,3 +262,55 @@ class TestTrainerSmoke:
         # not flowing (frozen weights, a detached graph, or a zeroed LR).
         losses = [epoch.train_loss for epoch in result.history]
         assert losses[-1] < losses[0]
+
+
+class TestFieldResolutionPrefersVocabulary:
+    """The OCR field must be chosen for *diversity*, not sample count.
+
+    A 700-sample run resolved ``name`` (204 samples, 104 distinct strings) over
+    ``player`` (333 samples, 40 distinct, one string repeated 22 times). That
+    looked like a count bug, but the diversity ranking agreed with the counts.
+    The case that matters is the opposite one: a field with far more samples but
+    a nearly fixed vocabulary teaches the head to memorise, so the resolver must
+    reject it. Ranking by raw count silently picks it.
+    """
+
+    def _manifest(self, name_texts, player_texts):
+        from cardvault_vision.datasets.manifest import DatasetManifest
+        from cardvault_vision.datasets.schema import Annotation, BBox, FieldAnnotation, SampleRecord
+
+        samples = []
+
+        def add(image_id, field, text, split):
+            fields = {field: FieldAnnotation(text=text,
+                                             bbox=BBox(0, 0, 10, 10))}
+            samples.append(SampleRecord(
+                image_id=image_id, card_id=image_id,
+                image_path=f"images/{image_id}.jpg",
+                annotation=Annotation(image_id=image_id, card_id=image_id,
+                                      card_type="MAGIC", fields=fields),
+                split=split))
+
+        for i, text in enumerate(name_texts):
+            add(f"n{i}", "name", text, "train" if i % 5 else "val")
+        for i, text in enumerate(player_texts):
+            add(f"p{i}", "player", text, "train" if i % 5 else "val")
+        return DatasetManifest(name="t", kind="synthetic", samples=samples)
+
+    def test_abundant_but_repetitive_field_loses_to_a_varied_one(self):
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        # 200 `player` samples drawing on 4 strings, 60 `name` samples drawing on
+        # 60 distinct strings. The count-based rule picks `player`.
+        player = [f"Star Player {i % 4}" for i in range(200)]
+        names = [f"Unique Card {i}" for i in range(60)]
+        manifest = self._manifest(names, player)
+
+        assert _resolve_ocr_field(manifest, "name-ocr") == "name"
+
+    def test_canonical_field_wins_when_diversity_is_comparable(self):
+        from cardvault_vision.cli.commands_models import _resolve_ocr_field
+
+        player = [f"Star Player {i}" for i in range(200)]
+        names = [f"Unique Card {i}" for i in range(150)]
+        assert _resolve_ocr_field(self._manifest(names, player), "name-ocr") == "name"
