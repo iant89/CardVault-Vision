@@ -91,6 +91,51 @@ class TestOcrContract:
         assert int(model.output_length(200)) >= 4 * len(name) // 2
 
 
+class TestVocabularySplit:
+    """CER must be separable into "reads glyphs" and "recalls a list".
+
+    With a fixed 12-name vocabulary a model can score well by memorising it, and
+    a single CER number cannot tell that apart from real reading.
+    """
+
+    def test_seen_and_unseen_are_reported_separately(self):
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(
+            ["Diego Ortiz", "Diego Ortiz", "Treno bekiz"],
+            ["Diego Ortiz", "Julio Ortiz", "Trevor Mbeki"],
+            known_references=["Diego Ortiz", "Julio Ortiz"],
+        )
+        assert set(report.by_vocabulary) == {"seen", "unseen"}
+        assert report.by_vocabulary["seen"]["count"] == 2
+        assert report.by_vocabulary["unseen"]["count"] == 1
+        # Memorised names score better than the genuinely unseen one.
+        assert (report.by_vocabulary["seen"]["cer"]
+                < report.by_vocabulary["unseen"]["cer"])
+
+    def test_split_is_omitted_without_a_known_vocabulary(self):
+        """Callers that do not know the training vocabulary must not get a
+        misleading empty or all-zero block."""
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(["a"], ["a"])
+        assert report.by_vocabulary == {}
+        assert "by training vocabulary" not in report.report()
+
+    def test_a_perfect_memoriser_is_exposed(self):
+        """The failure mode this exists to catch: exact on seen, hopeless on
+        unseen. Overall CER alone would look respectable."""
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(
+            ["Diego Ortiz", "Diego Ortiz", "XXXXX"],
+            ["Diego Ortiz", "Diego Ortiz", "Trevor Mbeki"],
+            known_references=["Diego Ortiz"],
+        )
+        assert report.by_vocabulary["seen"]["exact_match"] == 1.0
+        assert report.by_vocabulary["unseen"]["exact_match"] == 0.0
+
+
 class TestOcrBatchBucketing:
     """Batches must group similar widths; cost scales with the widest crop."""
 
