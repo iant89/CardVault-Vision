@@ -314,3 +314,69 @@ class TestFieldResolutionPrefersVocabulary:
         player = [f"Star Player {i}" for i in range(200)]
         names = [f"Unique Card {i}" for i in range(150)]
         assert _resolve_ocr_field(self._manifest(names, player), "name-ocr") == "name"
+
+
+class TestCollapseDiagnostics:
+    """An aggregate CER cannot distinguish "reads badly" from "emits one guess".
+
+    Every baseline in this project ran into that ambiguity: a model at CER 0.85
+    might be reading poorly, or might be emitting the same short string for every
+    input. The seen/unseen split does not separate them - both halves score the
+    same when the output is constant - so a degenerate run can be reported as a
+    genuine, if weak, result.
+    """
+
+    REFS = ["BulbaTh", "Dark Harbinger", "Sable Reaver of Nine Winters",
+            "Void Sorcerer", "Ancient Beast Tamer Duelist", "Shadow Sorcerer"]
+
+    def test_severe_truncation_is_flagged_even_when_every_prediction_differs(self):
+        """The 700-sample baseline: 10/10 distinct outputs, all far too short.
+
+        This is the case a "few distinct predictions" test misses entirely - the
+        model was not repeating itself, it was emitting a short guess and giving
+        up, so its output variety looked perfectly healthy.
+        """
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        preds = ["Snorge", "Shl eente", "ShoPa Pas Paergs", "Cho Paerge",
+                 "Sno Werg", "Sho Paene"]
+        report = evaluate_ocr(preds, self.REFS)
+
+        assert report.collapse["distinct_ratio"] == 1.0
+        assert report.collapse["mean_length_ratio"] < 0.65
+        assert report.is_collapsed
+
+    def test_a_near_constant_output_is_flagged(self):
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        preds = ["カイax", "カイax", "Sroaax", "カイax", "Surax", "カイax"]
+        report = evaluate_ocr(preds, self.REFS)
+
+        assert report.collapse["most_common_share"] >= 0.5
+        assert report.is_collapsed
+
+    def test_a_weak_but_genuine_model_is_not_flagged(self):
+        """Misreading characters is not collapse and must not be reported as it."""
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        preds = ["BulbaThh", "Dark Hbrbzger", "Sable Reaver of Nine Wintres",
+                 "Vokl Sorceror", "Ancient Beast Tamerr Duelist", "Shadcw Sorcerer"]
+        report = evaluate_ocr(preds, self.REFS)
+
+        assert report.cer > 0.05
+        assert not report.is_collapsed
+
+    def test_a_perfect_model_is_not_flagged(self):
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        report = evaluate_ocr(self.REFS, self.REFS)
+        assert report.collapse["mean_length_ratio"] == 1.0
+        assert not report.is_collapsed
+
+    def test_the_warning_is_rendered_when_collapsed(self):
+        from cardvault_vision.evaluation.metrics import evaluate_ocr
+
+        preds = ["Sn", "Dr", "Sb", "Vd", "An", "Sh"]
+        text = evaluate_ocr(preds, self.REFS).report()
+        assert "output variety:" in text
+        assert "WARNING" in text

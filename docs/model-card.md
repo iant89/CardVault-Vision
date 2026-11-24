@@ -61,7 +61,21 @@ it wins, and that benchmark has not been run.
 ## Evaluation
 
 - **OCR:** character error rate (CER), word error rate, exact-match rate, plus
-  per-length and per-confidence breakdowns. CER is the selection metric.
+  per-length, per-vocabulary and per-confidence breakdowns. CER is the selection
+  metric.
+- **Collapse is measured, not assumed.** Every report carries an *output
+  variety* block: distinct predictions, the share taken by the most common one,
+  the mean prediction length relative to the reference, and the share of edits
+  that are deletions. A run is flagged when the predictions carry almost no
+  information about the input, and the training loop logs a warning at the first
+  such epoch. This exists because an aggregate CER cannot separate "reads badly"
+  from "emits one short guess" — and two runs in this project were the latter
+  while looking like the former:
+  - the 78-sample run emitted 5 strings for everything (`most_common_share`
+    0.375);
+  - the 700-sample baseline produced 10/10 **distinct** predictions, so a
+    "few distinct outputs" check would have passed it, while its mean length was
+    59% of the reference and it was emitting a short guess and stopping.
 - **Classifier:** macro-F1 and accuracy, with a declared abstain threshold. A
   weak guess is reported as `UNKNOWN` rather than routed on.
 - **Hard-example mining** attributes each failure to a likely cause (glare,
