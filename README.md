@@ -157,6 +157,8 @@ extra to install, rather than an `ImportError` from deep in a stack trace.
 - [`docs/model-card.md`](docs/model-card.md) — what a shipped model is, and its limits
 - [`docs/dataset-card.md`](docs/dataset-card.md) — what the synthetic data is and is not
 - [`docs/decisions.md`](docs/decisions.md) — what was chosen, what was rejected, and why
+- [`docs/image-engine-integration.md`](docs/image-engine-integration.md) — how the TypeScript alignment engine is graded against synthetic truth, and what it currently gets wrong
+- [`docs/image-engine-upstream-patch.md`](docs/image-engine-upstream-patch.md) — the two detection fixes that belong in the engine, with the measurements behind them
 
 ## Continuous integration
 

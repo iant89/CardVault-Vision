@@ -26,6 +26,7 @@ from ..evaluation.alignment import (
 )
 from ..logging_utils import get_logger
 from .image_engine import AlignmentResult, align, engine_available
+from .selection import DEFAULT_POLICY, detect
 
 _LOG = get_logger("integrations.image_engine.fixtures")
 
@@ -38,6 +39,18 @@ class FixtureResult:
     failures: list[AlignmentCase]
 
 
+def _engine_choice(passes: Sequence[AlignmentResult]) -> AlignmentResult | None:
+    """The answer the engine itself would give across pooled passes.
+
+    First pass that aligned, else the first pass - so ``rerank=False`` still
+    honours the engine's own ranking rather than this module's opinion.
+    """
+    for result in passes:
+        if result.corners:
+            return result
+    return passes[0] if passes else None
+
+
 def grade(
     loader: Iterable,
     *,
@@ -46,12 +59,25 @@ def grade(
     limit: int | None = None,
     options: dict | None = None,
     engine: str | Path | None = None,
+    rerank: bool = True,
+    presets: Sequence[dict] | None = None,
 ) -> FixtureResult:
     """Run the engine over ``loader`` and grade every sample against truth.
 
     ``loader`` yields :class:`cardvault_vision.datasets.loader.Sample` objects;
     those carry the pixels and the annotation together, so no second pass over
     disk is needed.
+
+    Three configurations are worth grading, and the difference between them is
+    the point of this module:
+
+    - ``options={...}``: one engine pass with exactly those settings, engine's
+      own top-1. The baseline, and what ``--edge-threshold`` reproduces.
+    - ``options=None, rerank=False``: every preset in
+      :data:`~cardvault_vision.integrations.selection.EDGE_PRESETS`, pooled, but
+      still the engine's own ranking. Isolates what pooling buys.
+    - ``options=None, rerank=True`` (default): pooled *and* re-ranked. What the
+      product would actually ship, so it is what gets graded by default.
     """
     report = AlignmentReport(tolerance=tolerance)
     failures: list[AlignmentCase] = []
@@ -65,32 +91,54 @@ def grade(
             continue
         truth = [(float(x), float(y)) for x, y in truth_quad.points]
 
-        result: AlignmentResult = align(sample.image, profile=profile, options=options,
-                                        engine=engine)
+        if options is not None:
+            chosen = align(sample.image, profile=profile, options=options, engine=engine)
+            candidates = chosen.candidates
+            status, corners = chosen.status, chosen.corners
+            confidence = chosen.confidence
+        else:
+            detection = detect(sample.image, profile=profile, engine=engine,
+                               presets=presets, policy=DEFAULT_POLICY)
+            candidates = detection.candidates
+            engine_result = _engine_choice(detection.passes)
+            if rerank:
+                status, corners = detection.status, detection.corners
+                # The *engine's* confidence in the candidate that re-ranking
+                # chose, not the re-ranker's own score: the report should not
+                # present this module's number as the engine's.
+                confidence = None
+                if detection.chosen is not None:
+                    raw = detection.chosen.get("confidence")
+                    confidence = None if raw is None else float(raw)
+            else:
+                status = engine_result.status if engine_result else "CARD_NOT_FOUND"
+                corners = engine_result.corners if engine_result else None
+                confidence = engine_result.confidence if engine_result else None
+
         case = AlignmentCase(
             image_id=sample.image_id,
-            status=result.status,
-            candidates=len(result.candidates),
-            confidence=result.confidence,
+            status=status,
+            candidates=len(candidates),
+            confidence=confidence,
             profile=sample.profile,
         )
         # Every candidate, not just the winner: the engine may have proposed the
         # right quad and ranked it below a sliver, which is a ranking bug rather
         # than a detection failure and needs to be told apart from one.
-        for candidate in result.candidates:
-            corners = candidate.get("corners") or []
-            if len(corners) != 4:
+        for candidate in candidates:
+            candidate_corners = candidate.get("corners") or []
+            if len(candidate_corners) != 4:
                 continue
-            quad = [(float(point["x"]), float(point["y"])) for point in corners]
+            quad = [(float(point["x"]), float(point["y"])) for point in candidate_corners]
             iou = quad_iou(quad, truth)
             if case.oracle_iou is None or iou > case.oracle_iou:
                 case.oracle_iou = iou
                 case.oracle_corner_error = normalised_corner_error(quad, truth)
 
-        if result.corners:
-            case.corner_error = normalised_corner_error(result.corners, truth)
-            case.iou = quad_iou(result.corners, truth)
-            case.rotation_shift, _ = best_rotation(result.corners, truth)
+        if corners:
+            case.corner_error = normalised_corner_error(corners, truth)
+            case.iou = quad_iou(corners, truth)
+            case.rotation_shift, _ = best_rotation(corners, truth)
             if case.rotation_shift != 0:
                 _LOG.warning(
                     "Sample %s matched truth only after rotating %d step(s): the "
