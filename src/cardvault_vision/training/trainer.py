@@ -153,6 +153,11 @@ class EpochMetrics:
     learning_rate: float | None = None
     duration_s: float = 0.0
     samples_per_second: float = 0.0
+    #: True when the validation predictions carried almost no information about
+    #: the input (see ``OCRReport.is_collapsed``). A CER recorded on a collapsed
+    #: epoch is not a reading score, and comparing it against a healthy model's
+    #: CER is meaningless.
+    collapsed: bool = False
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items()}
@@ -279,6 +284,7 @@ def train_ocr(
 
     start_epoch = 0
     best_metric = float("inf")   # OCR: lower CER is better
+    warned_collapse = False
     history: list[EpochMetrics] = []
     started = time.perf_counter()
 
@@ -337,17 +343,35 @@ def train_ocr(
         train_loss = total_loss / max(seen, 1)
 
         val_loss = cer = em = None
+        collapsed = False
         if (epoch + 1) % max(1, config.val_every) == 0:
-            val_loss, cer, em, _ = _validate_ocr(
+            val_loss, cer, em, report = _validate_ocr(
                 model, val_set, charset, batch_size, device, decode_indices,
                 loader_config, amp_enabled, config,
             )
+            collapsed = bool(report and report.is_collapsed)
+            if collapsed and not warned_collapse:
+                # Say it once, at the first epoch it happens: the metrics for a
+                # collapsed model look like an ordinary weak result, and every
+                # baseline in this project was misread that way at least once.
+                warned_collapse = True
+                c = report.collapse
+                _LOG.warning(
+                    "Collapsed predictions at epoch %d: %d/%d distinct, mean "
+                    "length %.0f%% of reference. CER %.4f is not a reading score - "
+                    "the model is not conditioning on the image.",
+                    epoch + 1, int(c["distinct"]), report.count,
+                    c["mean_length_ratio"] * 100, cer,
+                )
+                recorder.event("collapsed", epoch=epoch + 1, cer=cer,
+                               collapse=report.collapse)
         duration = time.perf_counter() - epoch_started
         metrics = EpochMetrics(
             epoch=epoch + 1, train_loss=train_loss, val_loss=val_loss, cer=cer,
             exact_match=em, duration_s=duration,
             samples_per_second=seen / duration if duration else 0.0,
             learning_rate=optimizer.param_groups[0]["lr"],
+            collapsed=collapsed,
         )
         history.append(metrics)
         recorder.metric("train_loss", train_loss, step=epoch + 1)

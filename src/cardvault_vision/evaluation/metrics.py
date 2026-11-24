@@ -119,10 +119,25 @@ class OCRReport:
     #: vocabulary": a model that has memorised a small name list scores well on
     #: ``seen`` and collapses on ``unseen``.
     by_vocabulary: dict[str, dict[str, float]] = field(default_factory=dict)
+    #: How much the predictions vary. This is the check that catches a model
+    #: which has collapsed to emitting the same few strings for every input: a
+    #: collapsed model produces a plausible-looking CER while its ``unseen`` and
+    #: ``seen`` halves are identical, because it is not looking at the image at
+    #: all. ``distinct_ratio`` near 0 with ``count`` large is the signature.
+    collapse: dict[str, float] = field(default_factory=dict)
 
     @property
     def is_perfect(self) -> bool:
         return self.exact_match == 1.0
+
+    @property
+    def is_collapsed(self) -> bool:
+        """True when the predictions carry almost no information about the input.
+
+        Deliberately conservative: it reports the *observed* degeneracy rather
+        than guessing at causes. See :attr:`collapse`.
+        """
+        return bool(self.collapse.get("collapsed", 0.0))
 
     def top_confusions(self, limit: int = 10) -> list[tuple[str, str, int]]:
         """Most frequent ``(reference, prediction)`` character substitutions."""
@@ -143,6 +158,8 @@ class OCRReport:
             "low_confidence_accuracy": self.low_confidence_accuracy,
             "confusions": self.confusions,
             "by_length": self.by_length,
+            "by_vocabulary": self.by_vocabulary,
+            "collapse": self.collapse,
             "worst": self.worst,
         }
 
@@ -183,6 +200,23 @@ class OCRReport:
                 lines.append(
                     f"    {label:<8} n={int(values['count']):<5} "
                     f"CER={values['cer']:.4f} exact={values['exact_match']:.1%}"
+                )
+        if self.collapse and self.count:
+            c = self.collapse
+            lines.append("\n  output variety:")
+            lines.append(
+                f"    {int(c['distinct'])}/{self.count} distinct predictions "
+                f"({c['distinct_ratio']:.0%}), most common {c['most_common_share']:.0%}, "
+                f"longest {c['longest_share']:.0%}"
+            )
+            lines.append(
+                f"    mean length {c['mean_length_ratio']:.0%} of reference"
+            )
+            if self.is_collapsed:
+                lines.append(
+                    "    WARNING: predictions carry almost no information about the "
+                    "input.\n    CER and the seen/unseen split are meaningless for "
+                    "this run."
                 )
         top = self.top_confusions(8)
         if top:
@@ -263,6 +297,103 @@ def _aligned_pairs(prediction: str, reference: str):
     return reversed(pairs)
 
 
+#: A model whose predictions average less than this fraction of the reference
+#: length is truncating, not reading: it emits a short guess and abandons the
+#: rest. The 700-sample baseline sat at 0.59 while its predictions were all
+#: distinct, which is why output variety alone cannot detect collapse.
+_TRUNCATION_THRESHOLD = 0.65
+
+
+def _collapse_diagnostics(predictions: Sequence[str],
+                          references: Sequence[str]) -> dict[str, float]:
+    """Detect a model that emits the same few strings regardless of input.
+
+    This exists because an aggregate CER cannot tell the two failure modes apart,
+    and every baseline measured in this project ran into the ambiguity: a model
+    at CER 0.85 might be reading badly, or it might be emitting ``'Sho Paene'``
+    for everything. The seen/unseen split does not separate them either - both
+    halves score the same when the output is constant - so a run can look like a
+    genuine (if weak) result while carrying no signal about the input.
+
+    The numbers reported are:
+
+    ``distinct_ratio``
+        distinct predictions / predictions. Anything near 1 is healthy; the
+        degenerate case is 1/n.
+    ``most_common_share``
+        fraction of predictions equal to the most common one.
+    ``longest_share``
+        fraction of predictions equal to the single longest prediction. This is
+        the specific shape CTC collapse takes: the head learns to emit one long
+        string and the blank everywhere else, because that minimises the loss
+        when it cannot align.
+    ``mean_length_ratio``
+        mean(len(prediction)) / mean(len(reference)). A value well under 1 means
+        the model is truncating - it emits "Sho Paene" for a 28-character name.
+    ``deletion_share``
+        fraction of all character edits that are deletions. A model that cannot
+        align emits a short string; the aligner scores the missing characters as
+        deletions, so most failures being deletions is the signature of "I gave
+        up and emitted something short" rather than "I misread a glyph".
+    ``collapsed``
+        1.0 / 0.0 flag.
+    """
+    total = len(predictions)
+    if not total:
+        return {}
+    distinct = len(set(predictions))
+    counts: dict[str, int] = {}
+    for prediction in predictions:
+        counts[prediction] = counts.get(prediction, 0) + 1
+    most_common = max(counts.values())
+    longest = max(predictions, key=len)
+    longest_share = counts[longest] / total
+    mean_pred = sum(len(p) for p in predictions) / total
+    mean_ref = (sum(len(r) for r in references) / total) if references else 0.0
+    distinct_ratio = distinct / total
+    deletions = insertions = substitutions = 0
+    for prediction, reference in zip(predictions, references, strict=False):
+        for ref_char, pred_char in _aligned_pairs(prediction, reference):
+            if ref_char == pred_char:
+                continue
+            if pred_char is None:
+                deletions += 1
+            elif ref_char is None:
+                insertions += 1
+            else:
+                substitutions += 1
+    edits = deletions + insertions + substitutions
+    deletion_share = deletions / edits if edits else 0.0
+    mean_length_ratio = (mean_pred / mean_ref) if mean_ref else 0.0
+
+    # Thresholds are set to flag unambiguous degeneracy, not to police weak
+    # models. Two failure shapes were observed in this project and both escaped a
+    # naive "few distinct outputs" test:
+    #
+    #   * near-constant output (a 78-sample run emitted 5 strings for everything,
+    #     distinct_ratio 0.625, most common 0.375);
+    #   * severe truncation - the 700-sample baseline produced 10/10 *distinct*
+    #     predictions, so distinct_ratio was a healthy 1.0, while mean length was
+    #     59% of reference and 90% of edits were deletions. It was not
+    #     paraphrasing, it was emitting a short guess and giving up.
+    #
+    # Hence the length/deletion test alongside the variety test.
+    collapsed = float(
+        distinct_ratio <= 0.2
+        or most_common / total >= 0.5
+        or mean_length_ratio < _TRUNCATION_THRESHOLD
+    )
+    return {
+        "distinct": distinct,
+        "distinct_ratio": distinct_ratio,
+        "most_common_share": most_common / total,
+        "longest_share": longest_share,
+        "mean_length_ratio": mean_length_ratio,
+        "deletion_share": deletion_share,
+        "collapsed": collapsed,
+    }
+
+
 def evaluate_ocr(
     predictions: Sequence[str],
     references: Sequence[str],
@@ -305,6 +436,8 @@ def evaluate_ocr(
                 "exact_match": sum(predictions[i] == references[i] for i in indices)
                                 / len(indices),
             }
+
+    collapse = _collapse_diagnostics(predictions, references)
 
     buckets: dict[str, dict[str, float]] = {}
     for prediction, reference in zip(predictions, references, strict=False):
@@ -357,10 +490,11 @@ def evaluate_ocr(
         per_sample_cer=per_sample,
         confusions=build_confusion_matrix(predictions, references),
         by_length=by_length,
+        by_vocabulary=by_vocabulary,
+        collapse=collapse,
         worst=worst,
         mean_confidence=mean_confidence,
         low_confidence_accuracy=low_conf_accuracy,
-        by_vocabulary=by_vocabulary,
     )
 
 
