@@ -51,6 +51,12 @@ version = { attr = "cardvault_vision.version.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The Node bridge is part of the Python API surface: image_engine.py resolves it
+# relative to its own file, so it has to travel with the package or an installed
+# wheel would look for a script that is not there.
+"cardvault_vision.integrations" = ["*.mjs"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

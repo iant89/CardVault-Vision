@@ -20,6 +20,7 @@ from ..errors import CardVaultVisionError, MissingDependencyError
 from ..logging_utils import setup_logging
 from ..version import __version__
 from . import (
+    commands_align,
     commands_benchmark,
     commands_dataset,
     commands_eval,
@@ -62,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands_models.register(sub)
     commands_eval.register(sub)
     commands_benchmark.register(sub)
+    commands_align.register(sub)
     commands_export.register(sub)
     commands_system.register(sub)
     return parser
