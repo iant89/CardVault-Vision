@@ -71,24 +71,70 @@ it wins, and that benchmark has not been run.
 
 ## Measured baseline (CPU, synthetic)
 
-A `crnn` name-OCR run on a 900-sample synthetic set rendered at full scale
-(60 source cards, `phone_normal`), 49/7/4 card split, 40 epochs, batch 8,
-lr 1e-3:
+A `crnn` name-OCR run on a 700-sample synthetic set at full render scale
+(`phone_normal`, 250 source cards producing 215 distinct titles), split 80/10/10
+by card into 560/83/57 samples. Field `name`, 104 distinct strings in train,
+40 epochs, batch 8, lr 1e-3, no early stopping.
 
 | Metric | Value |
 |---|---|
-| held-out CER (val, 53 samples) | **0.826** |
-| train loss (epoch 40) | 2.18 |
-| samples/s | ~26 |
+| held-out CER (val, 31 samples) | **0.845** |
+| held-out CER (test, 24 samples) | **0.824** |
+| exact match | 0.0 |
+| character accuracy | 0.16 / 0.18 |
+| train loss (epoch 40) | 3.26 |
 
-This is a smoke-level result, not a quality claim: 49 training cards carry only
-ten distinct names, so the model is reading glyphs rather than memorising — it
-decodes `Diego Ortiz` as `Diego Ortizia` and `Julio Ortiz` as `Treno bekiz` —
-but exact-match stays at 0% because the vocabulary is far too small to close
-the last characters. Scaling the source pool is the next step; the pipeline no
-longer has a structural reason to fail.
+**This number is a floor, not a ceiling, and the run that produced it was
+under-trained.** A follow-up budget sweep on the same data showed the loss
+sitting on a plateau of ~3.3 until roughly epoch 40, then collapsing: on a
+24-sample subset, CER went from 1.000 at epoch 10 to 0.75 at epoch 100 to a
+**best of 0.119** at epoch ~380, with exact match reaching 42% on the samples it
+trained on. Twenty to forty epochs of this configuration is simply before the
+model has started to read; the plateau is not a data-vocabulary ceiling.
 
-Getting to this number required fixing four separate data bugs, each of which
+### Does it read, or does it recall?
+
+That was the question this baseline existed to answer, and the 40-epoch run
+cannot answer it: at CER 0.85 both halves are equally bad. The
+`evaluate_ocr(..., known_references=...)` split reports CER separately for
+held-out strings that appeared in training ("seen") and strings that did not
+("unseen"):
+
+| Split | Seen | Unseen |
+|---|---|---|
+| val | CER 0.864 (n=6) | CER 0.841 (n=25) |
+| test | CER 0.828 (n=5) | CER 0.824 (n=19) |
+
+The halves are indistinguishable, which rules out *simple* memorisation but
+proves nothing about reading — a model that has collapsed to a near-constant
+output scores the same on anything. The predictions show the actual failure
+mode: `'Sable Reaver of Nine Winters'` decodes as `'ShoPa Pas Paergs'` and
+`'Müller's Wager'` as `'Polene'`. Outputs cluster on a handful of strings
+(`Sho Paene`, `Pol Bene`, `Sno Werg`) that are too short — the model emits 6-10
+characters for references 14-38 characters long.
+
+The honest reading is that **the study is inconclusive at this budget**, and the
+next measurement is a properly-trained run, not a bigger dataset. The instrument
+for the real question (`known_references`) is now in place and covered by tests.
+
+### Data-quality caveat found while measuring
+
+Two generator defects distorted this baseline and are now fixed:
+
+* **A worker OOM killed 990 of 2,800 samples and the run still reported
+  success.** The pool turned `BrokenProcessPool` into a per-sample
+  "rejection", so a third of the dataset silently vanished. Workers now load a
+  downscaled source pool, and a dead worker is a loud retry rather than a
+  quality statistic.
+* **30% of name crops are near-illegible.** On the 700-sample set, 30% of `name`
+  crops have maximum luminance below 0.35 and 8% have contrast below 0.15; source
+  cards themselves are fine (median ROI contrast 0.52), so the loss happens in
+  the camera simulation. `low_light` is not the cause (`phone_normal` has a 5%
+  underexposure chance); the luminance drop accumulates across the lighting
+  chain. Training a head to read crops that a human cannot read sets a ceiling
+  that no dataset size will lift, and this is the next thing to fix.
+
+Getting even this far required fixing four earlier data bugs, each of which
 produced CER exactly 1.0 and looked like a broken model: stratified splitting
 that confined whole card types to one split, `name-ocr` hardcoding the `name`
 field when sports layouts use `player`, a source pool that let one card take 43%
