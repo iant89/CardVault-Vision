@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The core (dataset, synthetic, export validation) must work with no torch at
+  # all -- that is a documented promise, and `vision dataset validate` should
+  # never cost a 2 GB download. This job is what keeps that promise honest.
+  core:
+    name: Core (no torch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install core + dev dependencies (deliberately without torch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pillow pyyaml pytest ruff
+          python -m pip install -e . --no-deps
+
+      - name: Assert torch is genuinely absent
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("torch") is not None:
+              sys.exit("torch is installed in the core job; this job tests its absence")
+          print("torch correctly absent")
+          PY
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -q
+
+  # The full suite, including training, export and the torch-free consumer check.
+  full:
+    name: Full (torch + onnx)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install everything
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pillow pyyaml pytest ruff
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install onnx onnxruntime onnxscript
+          python -m pip install -e . --no-deps
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -q
+
+      # Rendered twice from the same seed, comparing bytes. This is the property
+      # that makes a dataset reproducible, so it is checked rather than assumed.
+      - name: Determinism smoke test
+        run: |
+          # --seed is mandatory here: without it the CLI draws fresh entropy, so
+          # "identical across worker counts" would compare two different datasets
+          # and fail for the wrong reason.
+          python -m cardvault_vision dataset bootstrap --out /tmp/src --count 6 --seed 1
+          python -m cardvault_vision synthetic generate \
+            --source /tmp/src --out /tmp/a --count 8 --seed 42 --workers 1 --render-scale 0.3
+          python -m cardvault_vision synthetic generate \
+            --source /tmp/src --out /tmp/b --count 8 --seed 42 --workers 2 --render-scale 0.3
+          python - <<'PY'
+          import hashlib, pathlib, sys
+
+          def digests(root):
+              return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in sorted((pathlib.Path(root) / "images").glob("*.jpg"))}
+
+          a, b = digests("/tmp/a"), digests("/tmp/b")
+          if not a:
+              sys.exit("no images generated")
+          if a != b:
+              differing = sorted(set(a) ^ set(b)) or [
+                  k for k in a if a[k] != b.get(k)]
+              sys.exit(f"workers=1 and workers=2 disagree on {differing}")
+          print(f"byte-identical across worker counts ({len(a)} images)")
+          PY
+        env:
+          PYTHONPATH: src

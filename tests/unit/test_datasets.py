@@ -202,10 +202,21 @@ class TestSplitting:
         assert first.assignments == second.assignments
 
     def test_different_seeds_produce_different_splits(self, source_dataset):
+        """Seeds must actually change the assignment.
+
+        Checked over several seed pairs: with the 8-card fixture a split is one
+        val card and one test card, so some seed pairs legitimately land on the
+        same card and a single pair was flaky (it broke purely because the demo
+        vocabulary changed how many RNG draws bootstrap makes).
+        """
         manifest = DatasetManifest.load(source_dataset / "manifest.json")
-        first = split_dataset(manifest, seed=1)
-        second = split_dataset(manifest, seed=2)
-        assert first.assignments != second.assignments
+        base = split_dataset(manifest, seed=1).assignments
+        differing = 0
+        for seed in (2, 3, 4, 5):
+            other = split_dataset(manifest, seed=seed).assignments
+            if other != base:
+                differing += 1
+        assert differing, "no seed changed the split, so the seed is not used"
 
 
 class TestLoader:
@@ -312,6 +323,43 @@ class TestDemoVocabulary:
         rng = np.random.default_rng(0)
         assert "name" in random_fields("POKEMON", rng)
         assert "type_line" in random_fields("MAGIC_THE_GATHERING", rng)
+
+    def test_title_vocabulary_is_large_enough_to_measure_reading(self):
+        """Duplicate titles make CER measure memorisation, not OCR.
+
+        The old pools were fixed lists (12 Magic names, 6 Yu-Gi-Oh names), so a
+        400-card bootstrap was 84% and 91% duplicates respectively and a model
+        could score well by memorising them. Composed names must keep the
+        space far larger than any realistic bootstrap.
+        """
+        import numpy as np
+
+        from cardvault_vision.demo import random_name
+
+        rng = np.random.default_rng(0)
+        for card_type, floor in (("MAGIC_THE_GATHERING", 500), ("YU_GI_OH", 200),
+                                 ("POKEMON", 500)):
+            seen = {random_name(card_type, rng) for _ in range(3000)}
+            assert len(seen) >= floor, (
+                f"{card_type} produced only {len(seen)} distinct names in 3000 "
+                f"draws (expected at least {floor})")
+
+    def test_composed_names_stay_well_formed(self):
+        """Longer names must remain plausible single-line card text."""
+        import re
+
+        import numpy as np
+
+        from cardvault_vision.demo import random_name
+
+        rng = np.random.default_rng(1)
+        for card_type in ("MAGIC_THE_GATHERING", "YU_GI_OH", "BASEBALL", "POKEMON"):
+            for _ in range(200):
+                name = random_name(card_type, rng)
+                assert name.strip() == name, f"leading/trailing space: {name!r}"
+                assert "  " not in name, f"double space: {name!r}"
+                assert len(name) <= 48, f"implausibly long name: {name!r}"
+                assert re.search(r"[^\W\d_]", name), f"no letters: {name!r}"
 
     def test_random_card_type_returns_only_canonical_types(self):
         import numpy as np

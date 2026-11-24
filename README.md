@@ -158,6 +158,24 @@ extra to install, rather than an `ImportError` from deep in a stack trace.
 - [`docs/dataset-card.md`](docs/dataset-card.md) — what the synthetic data is and is not
 - [`docs/decisions.md`](docs/decisions.md) — what was chosen, what was rejected, and why
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs two jobs on every push to `main` and every PR:
+
+- **Core (no torch)** — installs only `numpy`, `pillow`, `pyyaml`, `pytest` and
+  `ruff`, asserts torch is genuinely absent, then lints and runs the suite. This
+  is what keeps the "core needs no torch" promise honest; without it, an
+  accidental top-level `import torch` would only surface when a user without the
+  `train` extra tried to validate a dataset.
+- **Full (torch + onnx)** — the whole suite including training, export and the
+  torch-free consumer check, plus a determinism smoke test that renders the same
+  seed at `--workers 1` and `--workers 2` and compares image bytes.
+
+Tests that need torch are marked `@pytest.mark.torch` and are skipped (not
+failed) when it is missing. The marker was registered but never acted on until
+now, so a bare interpreter failed with `ModuleNotFoundError` instead of
+skipping.
+
 ## Status
 
 Phase 0 (foundation), Phase 1 (dataset engine) and Phase 2 (synthetic scan
