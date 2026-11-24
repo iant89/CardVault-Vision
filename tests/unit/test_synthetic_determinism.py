@@ -318,3 +318,112 @@ class TestWorkerCrashesAreNotRejections:
         from cardvault_vision.synthetic.pipeline import _WORKER_SOURCE_MAX_SIDE
 
         assert 256 <= _WORKER_SOURCE_MAX_SIDE <= 2000
+
+class TestAutoExposure:
+    """The camera must meter the scene, not just multiply it darker.
+
+    Every term in the chain used to darken: the illumination field averages at
+    its normalised mean while ``soft_light`` scales by 0.6..1.4, ``adjust_exposure``
+    multiplies by ``2**brightness`` with a negative mean, and the surface shading
+    multiplies again. Renders came out 2.03x darker than the source cards with
+    only 0.36 correlation between source and rendered luminance, and 30% of name
+    crops had a maximum luminance below 0.35 - text no reader could recover.
+    """
+
+    def _config(self, **kwargs):
+        from cardvault_vision.synthetic.lighting import LightingConfig
+        from cardvault_vision.synthetic.materials import LightSource
+
+        base = dict(brightness=0.0, contrast=1.0, gamma=1.0, saturation=1.0,
+                    kelvin=5500, ambient=0.35, fill=None,
+                    key=LightSource(azimuth=45, elevation=40, intensity=0.8,
+                                    hardness=0.3, kelvin=5500))
+        base.update(kwargs)
+        return LightingConfig(**base)
+
+    def test_a_dark_scene_is_metered_up(self):
+        """Two inputs of the same scene brightness land at the same exposure.
+
+        This is the whole point of metering: the output must depend on the
+        rendered scene, not on how many multiplying stages happened to darken it.
+        """
+        import numpy as np
+
+        from cardvault_vision.synthetic.lighting import apply_lighting
+
+        scene = np.full((32, 64, 3), 0.55, dtype=np.float32)
+        underexposed = self._config(brightness=-1.2)
+        out = apply_lighting(scene, underexposed, np.random.default_rng(0))
+        assert underexposed.auto_exposure > 1.0
+        assert out.card.mean() > 0.25, out.card.mean()
+
+    def test_a_bright_scene_is_metered_down(self):
+        import numpy as np
+
+        from cardvault_vision.synthetic.lighting import apply_lighting
+
+        scene = np.full((32, 64, 3), 0.85, dtype=np.float32)
+        config = self._config()
+        out = apply_lighting(scene, config, np.random.default_rng(0))
+        assert config.auto_exposure < 1.0
+        assert out.card.mean() < 0.85, out.card.mean()
+
+    def test_ordinary_scenes_land_near_the_meter_target(self):
+        """Without metering the same scene landed at 0.35-0.42 by accident."""
+        import numpy as np
+
+        from cardvault_vision.synthetic.lighting import apply_lighting
+
+        scene = np.full((32, 64, 3), 0.60, dtype=np.float32)
+        out = apply_lighting(scene, self._config(), np.random.default_rng(0))
+        luma = float(np.dot(out.card, [0.299, 0.587, 0.114]).mean())
+        assert 0.30 < luma < 0.55, luma
+
+    def test_the_meter_leaves_highlights_unclipped(self):
+        import numpy as np
+
+        from cardvault_vision.synthetic.lighting import apply_lighting
+
+        scene = np.full((32, 64, 3), 0.30, dtype=np.float32)
+        scene[:, 32:] = 0.95
+        out = apply_lighting(scene, self._config(), np.random.default_rng(0))
+        clipped = float((out.card >= 0.999).mean())
+        assert clipped < 0.02, clipped
+
+    def test_a_deliberately_dark_scene_stays_dark(self):
+        """`low_light` must not be metered back to a normal exposure.
+
+        Auto-exposure has finite gain. Its first implementation brightened the
+        low-light problem until its median luminance (0.304) was identical to an
+        ordinary frame's (0.304) - the defect vanished from the dataset.
+        """
+        import numpy as np
+
+        from cardvault_vision.synthetic.lighting import apply_lighting
+
+        scene = np.full((32, 64, 3), 0.55, dtype=np.float32)
+        dark = self._config(brightness=-1.2)
+        normal = self._config(brightness=0.0)
+        dark_out = apply_lighting(scene, dark, np.random.default_rng(0))
+        normal_out = apply_lighting(scene, normal, np.random.default_rng(0))
+        # The dark frame pins at its own (lower) gain ceiling rather than
+        # metering its way back up to a normal exposure. It does end up close to
+        # the target - that is what a meter at its limit looks like - but it is
+        # measurably darker and, crucially, the loop cannot reach the general
+        # ceiling while doing it.
+        assert dark.auto_exposure <= 1.6 + 1e-6, dark.auto_exposure
+        assert dark.auto_exposure > normal.auto_exposure
+        assert dark_out.card.mean() < normal_out.card.mean(), (
+            dark_out.card.mean(), normal_out.card.mean())
+
+    def test_the_gain_is_reported_for_reproducibility(self):
+        import numpy as np
+
+        from cardvault_vision.synthetic.lighting import apply_lighting
+
+        config = self._config()
+        apply_lighting(np.full((16, 32, 3), 0.5, dtype=np.float32), config,
+                       np.random.default_rng(0))
+        payload = config.to_dict()
+        assert "auto_exposure" in payload
+        assert "exposure_bias" in payload
